@@ -620,67 +620,304 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
 
     return out_png
 
+# ------------------ Seleção interativa e helpers para múltiplos arquivos ------------------
+
+def _parse_indices_input(s: str, max_n: int) -> List[int]:
+    """Converte string tipo '1,3-5' em lista de índices (1-based) válidos até max_n."""
+    s = (s or "").strip()
+    if not s:
+        return []
+    sel: set = set()
+    for part in s.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '-' in part:
+            try:
+                a_str, b_str = part.split('-', 1)
+                a = int(a_str)
+                b = int(b_str)
+                if a > b:
+                    a, b = b, a
+                for i in range(a, b + 1):
+                    if 1 <= i <= max_n:
+                        sel.add(i)
+            except Exception:
+                continue
+        else:
+            try:
+                i = int(part)
+                if 1 <= i <= max_n:
+                    sel.add(i)
+            except Exception:
+                continue
+    return sorted(sel)
+
+
+def selecionar_arquivos_interativo(folder: Path) -> List[Path]:
+    """Lista arquivos .lis na pasta e permite seleção múltipla via input."""
+    files = sorted(folder.glob('*.lis'), key=lambda f: f.stat().st_mtime, reverse=True)
+    if not files:
+        print("Nenhum arquivo .lis encontrado na pasta:", folder)
+        return []
+    print("Arquivos .lis encontrados (mais recentes primeiro):")
+    for idx, f in enumerate(files, start=1):
+        try:
+            t = f.stat().st_mtime
+        except Exception:
+            t = 0
+        print(f"  {idx:>2d}) {f.name}")
+    print("Digite os índices desejados (ex: 1,3-5) e pressione Enter. Deixe vazio para cancelar.")
+    choice = input("> ").strip()
+    idxs = _parse_indices_input(choice, len(files))
+    if not idxs:
+        print("Nenhuma seleção realizada.")
+        return []
+    selected = [files[i - 1] for i in idxs]
+    print("Selecionados:", ', '.join([p.name for p in selected]))
+    return selected
+
+
+def obter_xy_e_stats_de_excel(excel_path: Path):
+    """Extrai (x,y) e (mu,sigma) do Excel gerado (aba 'Dados'). Retorna (x, y, mu, sigma) ou None em falha."""
+    if not excel_path.exists():
+        return None
+    try:
+        df_excel = pd.read_excel(excel_path, sheet_name='Dados')
+    except Exception:
+        return None
+
+    def _find_column(candidates, cols):
+        for c in candidates:
+            for cc in cols:
+                if c.lower() == str(cc).lower():
+                    return cc
+        return None
+
+    cols = list(df_excel.columns)
+    voltage_candidates = ['Voltage_per_unit', 'Tensao_pu', 'voltagePerUnit', 'Tensão_pu', 'Tensão (pu)', 'Tensao', 'Voltage']
+    freq_candidates = ['Frequency', 'Frequencia', 'Freq', 'Frequência']
+    cumul_candidates = ['Cumulative', 'Cumulativo', 'CumulativeCount', 'Acumulado']
+    percent_candidates = ['Percent', 'Percentual', 'Percent %', 'Percentagem']
+
+    voltage_col = _find_column(voltage_candidates, cols)
+    freq_col = _find_column(freq_candidates, cols)
+    cumul_col = _find_column(cumul_candidates, cols)
+    percent_col = _find_column(percent_candidates, cols)
+
+    if voltage_col is None:
+        for cand in ['Tensao_pu', 'Tensao', 'Tensão_pu', 'Tensão']:
+            if cand in cols:
+                voltage_col = cand
+                break
+
+    df_num = df_excel.copy()
+    for c in df_num.columns:
+        if df_num[c].dtype == object:
+            df_num[c] = df_num[c].astype(str).str.replace(',', '.')
+        df_num[c] = pd.to_numeric(df_num[c], errors='coerce')
+
+    if voltage_col is None:
+        return None
+
+    voltage_series = df_num[voltage_col]
+
+    # obter freq
+    freq_series = None
+    if freq_col is not None and df_num[freq_col].notna().any():
+        freq_series = df_num[freq_col].fillna(0)
+    elif cumul_col is not None and df_num[cumul_col].notna().any():
+        cumul = df_num[cumul_col].fillna(method='ffill').fillna(0).to_numpy(dtype=float)
+        freq = np.diff(np.concatenate(([0.0], cumul)))
+        freq_series = pd.Series(freq)
+    elif percent_col is not None and df_num[percent_col].notna().any():
+        pct = df_num[percent_col].fillna(0).to_numpy(dtype=float)
+        total = None
+        if cumul_col is not None and not df_num[cumul_col].isna().all():
+            total = float(df_num[cumul_col].dropna().iloc[-1])
+        else:
+            s = np.sum(pct)
+            total = (s / 100.0) if s != 0 else 100.0
+        freq = (pct / 100.0) * total
+        freq_series = pd.Series(freq)
+    else:
+        for cc in df_num.columns:
+            if 'cumul' in str(cc).lower():
+                cumul = df_num[cc].fillna(method='ffill').fillna(0).to_numpy(dtype=float)
+                freq = np.diff(np.concatenate(([0.0], cumul)))
+                freq_series = pd.Series(freq)
+                break
+
+    if freq_series is None:
+        return None
+
+    x = voltage_series.to_numpy(dtype=float)
+    y = freq_series.to_numpy(dtype=float)
+    n = min(len(x), len(y))
+    x = x[:n]; y = y[:n]
+    mask = np.isfinite(x) & np.isfinite(y) & (y >= 0)
+    x = x[mask]; y = y[mask]
+    if x.size == 0 or y.size == 0 or np.sum(y) <= 0:
+        return None
+
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    # stats
+    try:
+        computed_stats = calcular_estatisticas_do_df(df_excel)
+    except Exception:
+        computed_stats = {}
+
+    mu = computed_stats.get('mean', np.nan)
+    sigma = computed_stats.get('std_dev', np.nan)
+
+    return x, y, mu, sigma
+
+
+def criar_grafico_comparativo(excel_paths: List[Path], outdir: Path, mostrar: bool = False) -> Optional[Path]:
+    """Gera gráfico comparativo sobrepondo séries e ajustes gaussianos de múltiplos Excel gerados."""
+    series = []
+    labels = []
+    for p in excel_paths:
+        res = obter_xy_e_stats_de_excel(p)
+        if res is None:
+            print("Aviso: não foi possível extrair dados de:", p)
+            continue
+        x, y, mu, sigma = res
+        series.append((x, y, mu, sigma))
+        labels.append(p.stem)
+
+    if not series:
+        print("Sem dados para gráfico comparativo.")
+        return None
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+    for (x, y, mu, sigma), label in zip(series, labels):
+        # pontos (suavemente)
+        ax.scatter(x, y, s=20, alpha=0.5, label=f"{label} pontos")
+        # ajuste gaussiano
+        if sigma and np.isfinite(sigma) and sigma > 0:
+            x_smooth = np.linspace(np.min(x), np.max(x), 800)
+            pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
+            scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
+            y_smooth = pdf * scale_factor
+            ax.plot(x_smooth, y_smooth, linewidth=2.0, label=f"{label} ajuste")
+
+    ax.set_xlabel('Tensão (pu)')
+    ax.set_ylabel('Frequência')
+    ax.grid(alpha=0.25)
+    ax.set_title('Comparativo — Distribuição e Ajuste Gaussiano')
+    ax.legend(ncol=2, fontsize=8)
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    out_png = outdir / "gauss_comparativo.png"
+    try:
+        plt.tight_layout()
+        plt.savefig(out_png, dpi=220, bbox_inches='tight')
+        print("Gráfico comparativo salvo em:", out_png)
+        if mostrar:
+            plt.show()
+    finally:
+        plt.close(fig)
+    return out_png
+
 # ------------------ Fluxo principal ------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Analisa o .lis mais recente e gera Excel + gráfico Gaussiano.")
+    parser = argparse.ArgumentParser(description="Analisa arquivos .lis e gera Excel + gráfico (com opção de comparativo).")
     parser.add_argument('--folder', default='.', help='Pasta para procurar o .lis (padrão = atual).')
-    parser.add_argument('--sim-index', type=int, default=1, help='Índice para nomear arquivos de saída.')
+    parser.add_argument('--sim-index', type=int, default=1, help='Índice inicial para nomear arquivos de saída.')
     parser.add_argument('--outdir', default='Simulation_Result', help='Pasta de saída.')
+    parser.add_argument('--select', action='store_true', help='Abrir seleção interativa de arquivos .lis (multi-seleção).')
+    parser.add_argument('--lis', nargs='*', help='Lista de arquivos .lis para processar (pode múltiplos).')
+    parser.add_argument('--gui', action='store_true', help='Abrir interface gráfica (Tkinter).')
     args = parser.parse_args()
+
+    # GUI override
+    if args.gui:
+        try:
+            from gui import launch_gui
+        except Exception as e:
+            print('Erro ao carregar GUI:', e)
+            raise SystemExit(2)
+        launch_gui(Path(args.folder).resolve(), Path(args.outdir).resolve(), args.sim_index)
+        return
 
     folder = Path(args.folder).resolve()
     outdir = Path(args.outdir).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # localizar o .lis mais recente
-    lis_files = list(folder.glob('*.lis'))
-    if not lis_files:
-        print("Nenhum arquivo .lis encontrado na pasta:", folder)
-        raise SystemExit(1)
-    lis_path = max(lis_files, key=lambda f: f.stat().st_mtime)
-
-    print("Usando .lis:", lis_path)
-
-    # parse do .lis
-    df, stats_lines, summary_from_lis = parse_lis_table(lis_path)
-    if df is None:
-        print("Tabela não encontrada no .lis (nenhuma linha com 6 números detectada).")
-        raise SystemExit(2)
-
-    # salva aba 'Dados'
-    excel_path = outdir / f"Resultados_Simulacao_{args.sim_index}.xlsx"
-    save_df_to_excel_only(df, excel_path)
-    # calcula estatísticas ponderadas a partir dos bins
-    try:
-        computed_stats = calcular_estatisticas_do_df(df)
-    except Exception as e:
-        print("Erro ao calcular estatísticas a partir dos bins:", e)
-        computed_stats = {}
-
-    # escreve a aba 'Estatisticas' (inclui os valores extraídos do .lis, se houver)
-    try:
-        escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary_from_lis)
-    except Exception as e:
-        print("Falha ao escrever estatísticas no Excel:", e)
-        # fallback: tenta salvar CSV
-        try:
-            csv_path = outdir / f"estatisticas_sim_{args.sim_index}.csv"
-            df_csv = pd.DataFrame([computed_stats])
-            df_csv.to_csv(csv_path, index=False)
-            print("Fallback: estatísticas salvas em CSV:", csv_path)
-        except Exception:
-            pass
-
-    # criar o gráfico com base no Excel gerado
-    print("Agora criando o gráfico com base no Excel gerado...")
-    png_path = criar_grafico_a_partir_do_excel(excel_path, outdir, sim_index=args.sim_index,
-                                              salvar_png=True, mostrar=False)
-
-    if png_path:
-        print("Gráfico criado:", png_path)
+    # Descobrir arquivos a processar
+    selected_files: List[Path] = []
+    if args.lis:
+        for item in args.lis:
+            p = Path(item)
+            if not p.is_absolute():
+                p = (folder / p).resolve()
+            if p.exists() and p.suffix.lower() == '.lis':
+                selected_files.append(p)
+            else:
+                print("Ignorando (não encontrado ou extensão diferente de .lis):", item)
+    elif args.select:
+        selected_files = selecionar_arquivos_interativo(folder)
     else:
-        print("Falha ao criar o gráfico.")
+        lis_files = list(folder.glob('*.lis'))
+        if not lis_files:
+            print("Nenhum arquivo .lis encontrado na pasta:", folder)
+            raise SystemExit(1)
+        lis_path = max(lis_files, key=lambda f: f.stat().st_mtime)
+        selected_files = [lis_path]
+
+    if not selected_files:
+        print("Nada a processar.")
+        raise SystemExit(0)
+
+    excel_paths: List[Path] = []
+    for idx, lis_path in enumerate(selected_files, start=args.sim_index):
+        print("Usando .lis:", lis_path)
+        # parse do .lis
+        df, stats_lines, summary_from_lis = parse_lis_table(lis_path)
+        if df is None:
+            print("Tabela não encontrada no .lis (nenhuma linha com 6 números detectada):", lis_path)
+            continue
+
+        # salva aba 'Dados'
+        excel_path = outdir / f"Resultados_Simulacao_{idx}.xlsx"
+        save_df_to_excel_only(df, excel_path)
+
+        # calcula estatísticas ponderadas a partir dos bins
+        try:
+            computed_stats = calcular_estatisticas_do_df(df)
+        except Exception as e:
+            print("Erro ao calcular estatísticas a partir dos bins:", e)
+            computed_stats = {}
+
+        # escreve a aba 'Estatisticas' (inclui os valores extraídos do .lis, se houver)
+        try:
+            escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary_from_lis)
+        except Exception as e:
+            print("Falha ao escrever estatísticas no Excel:", e)
+            # fallback: tenta salvar CSV
+            try:
+                csv_path = outdir / f"estatisticas_sim_{idx}.csv"
+                df_csv = pd.DataFrame([computed_stats])
+                df_csv.to_csv(csv_path, index=False)
+                print("Fallback: estatísticas salvas em CSV:", csv_path)
+            except Exception:
+                pass
+
+        # criar o gráfico com base no Excel gerado
+        print("Criando gráfico individual...")
+        _ = criar_grafico_a_partir_do_excel(excel_path, outdir, sim_index=idx, salvar_png=True, mostrar=False)
+        excel_paths.append(excel_path)
+
+    # Se houver múltiplos, cria gráfico comparativo sobreposto
+    if len(excel_paths) > 1:
+        print("Gerando gráfico comparativo sobreposto...")
+        _ = criar_grafico_comparativo(excel_paths, outdir, mostrar=False)
 
     print("Processo concluído. Verifique a pasta:", outdir)
 

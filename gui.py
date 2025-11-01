@@ -22,6 +22,12 @@ try:
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
+    from acp_parser import (
+        AcpParser,
+        AtpRunner,
+        modify_acp_rpi,
+        run_acp_simulation
+    )
 except Exception:
     # fallback: erro será exibido quando tentar abrir GUI via main
     raise
@@ -358,6 +364,61 @@ class LisAnalysisApp:
         btn_detect.pack(pady=(5,0))
         _Tooltip(btn_detect, 'Analisa o primeiro arquivo selecionado para detectar variáveis')
 
+        # Linha 1.8: Controle ATP/ATPDraw (NOVA SEÇÃO)
+        row1_8 = ttk.LabelFrame(container, text='⚡ Controle de Simulação ATP', padding=(10,8), style='Card.TLabelframe')
+        row1_8.pack(fill='x', pady=(8,0))
+        
+        # Frame para organizar controles ATP
+        atp_frame = ttk.Frame(row1_8)
+        atp_frame.pack(fill='x')
+        
+        # Linha 1: Arquivo .acp
+        ttk.Label(atp_frame, text='Arquivo .acp:').grid(row=0, column=0, sticky='w', pady=2)
+        self.acp_file_var = tk.StringVar()
+        self.ent_acp = ttk.Entry(atp_frame, textvariable=self.acp_file_var, width=40)
+        self.ent_acp.grid(row=0, column=1, sticky='we', padx=6, pady=2)
+        btn_acp = ttk.Button(atp_frame, text='Escolher…', command=self._choose_acp_file)
+        btn_acp.grid(row=0, column=2, sticky='w', pady=2)
+        _Tooltip(btn_acp, 'Selecionar arquivo .acp do ATPDraw para modificar')
+        
+        # Linha 2: Valor RPI
+        ttk.Label(atp_frame, text='RPI (Ω):').grid(row=1, column=0, sticky='w', pady=2)
+        self.rpi_value_var = tk.DoubleVar(value=100.0)
+        spn_rpi = ttk.Spinbox(atp_frame, from_=1, to=10000, textvariable=self.rpi_value_var, width=15)
+        spn_rpi.grid(row=1, column=1, sticky='w', padx=6, pady=2)
+        _Tooltip(spn_rpi, 'Valor da Resistência de Pré-Inserção em Ohms')
+        
+        # Linha 3: Caminho do ATP
+        ttk.Label(atp_frame, text='Executável ATP:').grid(row=2, column=0, sticky='w', pady=2)
+        self.atp_exe_var = tk.StringVar()
+        self.ent_atp_exe = ttk.Entry(atp_frame, textvariable=self.atp_exe_var, width=40)
+        self.ent_atp_exe.grid(row=2, column=1, sticky='we', padx=6, pady=2)
+        btn_atp_exe = ttk.Button(atp_frame, text='Escolher…', command=self._choose_atp_executable)
+        btn_atp_exe.grid(row=2, column=2, sticky='w', pady=2)
+        _Tooltip(btn_atp_exe, 'Caminho para tpbig ou atpmingw (deixe vazio para auto-detectar)')
+        
+        # Botões de ação ATP
+        atp_buttons = ttk.Frame(row1_8)
+        atp_buttons.pack(fill='x', pady=(5,0))
+        
+        self.btn_analyze_acp = ttk.Button(atp_buttons, text='🔍 Analisar .acp', command=self._analyze_acp)
+        self.btn_analyze_acp.pack(side='left', padx=2)
+        _Tooltip(self.btn_analyze_acp, 'Mostra resumo do arquivo .acp')
+        
+        self.btn_modify_acp = ttk.Button(atp_buttons, text='🔧 Modificar RPI', command=self._modify_acp_rpi)
+        self.btn_modify_acp.pack(side='left', padx=2)
+        _Tooltip(self.btn_modify_acp, 'Cria novo .acp com RPI modificado')
+        
+        self.btn_run_simulation = ttk.Button(atp_buttons, text='🚀 Executar Simulação', command=self._run_atp_simulation)
+        self.btn_run_simulation.pack(side='left', padx=2)
+        _Tooltip(self.btn_run_simulation, 'Executa ATP e gera arquivo .lis')
+        
+        self.btn_full_cycle = ttk.Button(atp_buttons, text='⚙️ Ciclo Completo', command=self._run_full_cycle)
+        self.btn_full_cycle.pack(side='left', padx=2)
+        _Tooltip(self.btn_full_cycle, 'Modificar RPI → Simular → Analisar')
+        
+        atp_frame.columnconfigure(1, weight=1)
+
         # Linha 2: Filtro
         row2 = ttk.Frame(container, padding=(0,4,0,0))
         row2.pack(fill='x')
@@ -622,6 +683,323 @@ class LisAnalysisApp:
             var_bool.set(state)
         action = 'selecionadas' if state else 'desmarcadas'
         self.status_var.set(f'{len(self.variable_checkboxes)} variável(is) {action}.')
+
+    # ==================== MÉTODOS DE CONTROLE ATP ====================
+    
+    def _choose_acp_file(self):
+        """Escolhe arquivo .acp para modificar/simular"""
+        folder = Path(self.folder_var.get())
+        initial_dir = folder if folder.is_dir() else Path.home()
+        
+        filepath = filedialog.askopenfilename(
+            title='Selecionar arquivo .acp',
+            initialdir=initial_dir,
+            filetypes=[
+                ('Arquivos ATPDraw', '*.acp'),
+                ('Todos os arquivos', '*.*')
+            ]
+        )
+        
+        if filepath:
+            self.acp_file_var.set(filepath)
+            self.status_var.set(f'Arquivo .acp selecionado: {Path(filepath).name}')
+    
+    def _choose_atp_executable(self):
+        """Escolhe executável do ATP (tpbig, atpmingw)"""
+        filepath = filedialog.askopenfilename(
+            title='Selecionar executável ATP',
+            initialdir='/usr/local/bin',
+            filetypes=[
+                ('Executáveis', 'tpbig;atpmingw;*.exe'),
+                ('Todos os arquivos', '*.*')
+            ]
+        )
+        
+        if filepath:
+            self.atp_exe_var.set(filepath)
+            self.status_var.set(f'Executável ATP: {Path(filepath).name}')
+    
+    def _analyze_acp(self):
+        """Analisa arquivo .acp e mostra resumo"""
+        acp_path = self.acp_file_var.get()
+        
+        if not acp_path:
+            messagebox.showwarning('Aviso', 'Selecione um arquivo .acp primeiro!')
+            return
+        
+        acp_path = Path(acp_path)
+        
+        if not acp_path.exists():
+            messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
+            return
+        
+        self.status_var.set('Analisando arquivo .acp...')
+        
+        try:
+            parser = AcpParser(acp_path)
+            parser.extract_atp_from_acp()
+            
+            if not parser.atp_text:
+                messagebox.showerror('Erro', 'Não foi possível extrair conteúdo ATP do arquivo .acp')
+                return
+            
+            params = parser.find_control_parameters()
+            
+            # Montar mensagem de resumo
+            msg = f"📋 Resumo do Arquivo: {acp_path.name}\n"
+            msg += "=" * 60 + "\n\n"
+            
+            if params['dt'] and params['tmax']:
+                msg += f"⚙️ Configuração de Tempo:\n"
+                msg += f"   • dT   = {params['dt']:.6E} s\n"
+                msg += f"   • Tmax = {params['tmax']:.6f} s\n\n"
+            
+            if params['rpi_values']:
+                msg += f"🔌 Resistências de Pré-Inserção (RPI): {len(params['rpi_values'])}\n"
+                for rpi in params['rpi_values'][:10]:  # Mostrar até 10
+                    msg += f"   • Linha {rpi['line']+1}: {rpi['value']:.2f} Ω\n"
+                if len(params['rpi_values']) > 10:
+                    msg += f"   ... e mais {len(params['rpi_values']) - 10}\n"
+                msg += "\n"
+            else:
+                msg += "⚠️ Nenhum RPI detectado no arquivo\n\n"
+            
+            if params['switch_times']:
+                msg += f"🔀 Tempos de Chaveamento: {len(params['switch_times'])}\n"
+                for sw in params['switch_times'][:5]:
+                    msg += f"   • Linha {sw['line']+1}: {sw['time']:.6f} s\n"
+                if len(params['switch_times']) > 5:
+                    msg += f"   ... e mais {len(params['switch_times']) - 5}\n"
+            
+            messagebox.showinfo('Análise do Arquivo .acp', msg)
+            self.status_var.set(f'Análise concluída: {acp_path.name}')
+            
+        except Exception as e:
+            messagebox.showerror('Erro', f'Falha ao analisar .acp:\n\n{str(e)}')
+            self.status_var.set('Erro ao analisar .acp')
+            import traceback
+            traceback.print_exc()
+    
+    def _modify_acp_rpi(self):
+        """Modifica valor de RPI no arquivo .acp"""
+        acp_path = self.acp_file_var.get()
+        
+        if not acp_path:
+            messagebox.showwarning('Aviso', 'Selecione um arquivo .acp primeiro!')
+            return
+        
+        acp_path = Path(acp_path)
+        
+        if not acp_path.exists():
+            messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
+            return
+        
+        new_rpi = self.rpi_value_var.get()
+        
+        if new_rpi <= 0:
+            messagebox.showerror('Erro', 'Valor de RPI deve ser maior que zero!')
+            return
+        
+        # Confirmar ação
+        confirm = messagebox.askyesno(
+            'Confirmar Modificação',
+            f'Modificar RPI para {new_rpi:.2f} Ω?\n\n'
+            f'Arquivo original: {acp_path.name}\n'
+            f'Novo arquivo: {acp_path.stem}_RPI{int(new_rpi)}.acp'
+        )
+        
+        if not confirm:
+            return
+        
+        self.status_var.set(f'Modificando RPI para {new_rpi:.2f} Ω...')
+        
+        try:
+            output_path = modify_acp_rpi(acp_path, new_rpi)
+            
+            if output_path:
+                messagebox.showinfo(
+                    'Sucesso',
+                    f'✅ Arquivo modificado criado:\n\n{output_path.name}\n\n'
+                    f'RPI = {new_rpi:.2f} Ω'
+                )
+                
+                # Atualizar campo para novo arquivo
+                self.acp_file_var.set(str(output_path))
+                self.status_var.set(f'RPI modificado: {output_path.name}')
+            else:
+                messagebox.showerror('Erro', 'Falha ao modificar arquivo .acp')
+                self.status_var.set('Erro ao modificar .acp')
+        
+        except Exception as e:
+            messagebox.showerror('Erro', f'Falha ao modificar RPI:\n\n{str(e)}')
+            self.status_var.set('Erro ao modificar RPI')
+            import traceback
+            traceback.print_exc()
+    
+    def _run_atp_simulation(self):
+        """Executa simulação ATP e gera arquivo .lis"""
+        acp_path = self.acp_file_var.get()
+        
+        if not acp_path:
+            messagebox.showwarning('Aviso', 'Selecione um arquivo .acp primeiro!')
+            return
+        
+        acp_path = Path(acp_path)
+        
+        if not acp_path.exists():
+            messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
+            return
+        
+        output_dir = Path(self.outdir_var.get())
+        atp_exe = self.atp_exe_var.get() or None
+        
+        self.status_var.set('Executando simulação ATP...')
+        self.btn_run_simulation.config(state='disabled')
+        
+        def run_thread():
+            try:
+                runner = AtpRunner(atp_exe)
+                
+                if not runner.atpdraw_path:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        'Erro',
+                        'Executável do ATP não encontrado!\n\n'
+                        'Configure o caminho manualmente ou instale o ATP.'
+                    ))
+                    self.status_var.set('Erro: ATP não encontrado')
+                    self.btn_run_simulation.config(state='normal')
+                    return
+                
+                lis_path = runner.run_simulation(acp_path, output_dir)
+                
+                if lis_path:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        'Simulação Concluída',
+                        f'✅ Arquivo .lis gerado:\n\n{lis_path.name}\n\n'
+                        f'Localização: {lis_path.parent}'
+                    ))
+                    self.status_var.set(f'Simulação concluída: {lis_path.name}')
+                    
+                    # Atualizar lista de arquivos .lis
+                    self.root.after(0, self.refresh_list)
+                else:
+                    self.root.after(0, lambda: messagebox.showerror(
+                        'Erro',
+                        'Simulação falhou ou arquivo .lis não foi gerado.\n\n'
+                        'Verifique a saída do console para mais detalhes.'
+                    ))
+                    self.status_var.set('Erro na simulação ATP')
+            
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    'Erro',
+                    f'Falha na simulação:\n\n{str(e)}'
+                ))
+                self.status_var.set('Erro na simulação')
+                import traceback
+                traceback.print_exc()
+            
+            finally:
+                self.btn_run_simulation.config(state='normal')
+        
+        threading.Thread(target=run_thread, daemon=True).start()
+    
+    def _run_full_cycle(self):
+        """Executa ciclo completo: Modificar RPI → Simular → Analisar"""
+        acp_path = self.acp_file_var.get()
+        
+        if not acp_path:
+            messagebox.showwarning('Aviso', 'Selecione um arquivo .acp primeiro!')
+            return
+        
+        acp_path = Path(acp_path)
+        
+        if not acp_path.exists():
+            messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
+            return
+        
+        new_rpi = self.rpi_value_var.get()
+        
+        if new_rpi <= 0:
+            messagebox.showerror('Erro', 'Valor de RPI deve ser maior que zero!')
+            return
+        
+        # Confirmar ciclo completo
+        confirm = messagebox.askyesno(
+            'Confirmar Ciclo Completo',
+            f'Executar ciclo completo?\n\n'
+            f'1. Modificar RPI para {new_rpi:.2f} Ω\n'
+            f'2. Executar simulação ATP\n'
+            f'3. Analisar resultado .lis\n\n'
+            f'Isso pode levar alguns minutos.'
+        )
+        
+        if not confirm:
+            return
+        
+        self.status_var.set('Iniciando ciclo completo...')
+        self.btn_full_cycle.config(state='disabled')
+        
+        def full_cycle_thread():
+            try:
+                output_dir = Path(self.outdir_var.get())
+                atp_exe = self.atp_exe_var.get() or None
+                
+                # Etapa 1: Modificar RPI
+                self.status_var.set(f'[1/3] Modificando RPI para {new_rpi:.2f} Ω...')
+                modified_acp = modify_acp_rpi(acp_path, new_rpi)
+                
+                if not modified_acp:
+                    raise Exception('Falha ao modificar arquivo .acp')
+                
+                print(f"✅ Arquivo modificado: {modified_acp}")
+                
+                # Etapa 2: Simular
+                self.status_var.set('[2/3] Executando simulação ATP...')
+                runner = AtpRunner(atp_exe)
+                
+                if not runner.atpdraw_path:
+                    raise Exception('Executável do ATP não encontrado')
+                
+                lis_path = runner.run_simulation(modified_acp, output_dir)
+                
+                if not lis_path:
+                    raise Exception('Simulação falhou ou .lis não foi gerado')
+                
+                print(f"✅ Simulação concluída: {lis_path}")
+                
+                # Etapa 3: Adicionar à lista para análise
+                self.status_var.set('[3/3] Atualizando lista...')
+                self.root.after(0, self.refresh_list)
+                
+                # Sucesso!
+                self.root.after(0, lambda: messagebox.showinfo(
+                    'Ciclo Completo Concluído',
+                    f'✅ Ciclo completo executado com sucesso!\n\n'
+                    f'1. RPI modificado: {new_rpi:.2f} Ω\n'
+                    f'2. Simulação concluída\n'
+                    f'3. Arquivo .lis: {lis_path.name}\n\n'
+                    f'Agora você pode selecionar o arquivo .lis na lista\n'
+                    f'e clicar em "Processar" para gerar gráficos e estatísticas.'
+                ))
+                
+                self.status_var.set(f'Ciclo completo concluído: {lis_path.name}')
+            
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror(
+                    'Erro no Ciclo Completo',
+                    f'Falha durante o ciclo:\n\n{str(e)}'
+                ))
+                self.status_var.set('Erro no ciclo completo')
+                import traceback
+                traceback.print_exc()
+            
+            finally:
+                self.btn_full_cycle.config(state='normal')
+        
+        threading.Thread(target=full_cycle_thread, daemon=True).start()
+
+    # ==================== FIM DOS MÉTODOS ATP ====================
 
     def _populate_tree(self):
         for iid in self.tv.get_children(''):

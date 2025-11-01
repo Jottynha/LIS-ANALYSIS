@@ -25,6 +25,129 @@ STAT_TERMINATOR = "End of"
 # regex para números (inteiros, floats, científicos); linguagem usada para definir padrões de busca em textos.
 NUM_RE = re.compile(r'[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?')
 
+# ---------- Detecção de variáveis de saída do .lis ----------
+def parse_lis_output_variables(lis_path: Path) -> List[str]:
+    """
+    Lê o cabeçalho do .lis e extrai os nomes das variáveis de saída.
+    Procura pela linha com "Step" e "Time" e extrai nomes das variáveis.
+    
+    Retorna lista de nomes de variáveis (ex: ['X0003A', 'X0003B', 'X0003C', ...])
+    """
+    variables = []
+    
+    with lis_path.open('r', errors='replace') as f:
+        for line in f:
+            # Procurar pela linha que contém "Step" e "Time" (cabeçalho da tabela de dados)
+            if 'Step' in line and 'Time' in line:
+                # Esta é a linha com os nomes das variáveis
+                parts = line.split()
+                
+                # Remover "Step" e "Time" (primeiras duas colunas)
+                for part in parts:
+                    clean_part = part.strip()
+                    # Ignorar Step, Time e strings vazias
+                    if clean_part and clean_part not in ['Step', 'Time']:
+                        # Verificar se não é um número
+                        try:
+                            float(clean_part)
+                            continue
+                        except ValueError:
+                            # É uma variável válida
+                            variables.append(clean_part)
+                
+                break  # Encontrou a linha, não precisa continuar
+    
+    return variables
+
+# ---------- Parsing de tabela de séries temporais (Step/Time + Variáveis) ----------
+def parse_lis_time_series(lis_path: Path, selected_variables: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    """
+    Lê a tabela de séries temporais do .lis (Step, Time, STDA, STDB, etc.)
+    e retorna DataFrame com apenas as variáveis selecionadas.
+    
+    Args:
+        lis_path: Caminho para o arquivo .lis
+        selected_variables: Lista de variáveis para incluir. Se None, inclui todas.
+    
+    Returns:
+        DataFrame com colunas: Step, Time, [variáveis selecionadas]
+        Ou None se não encontrar dados
+    """
+    # Primeiro detectar as variáveis disponíveis
+    all_variables = parse_lis_output_variables(lis_path)
+    
+    if not all_variables:
+        print(f"⚠️ Nenhuma variável detectada em {lis_path.name}")
+        return None
+    
+    # Se não especificou variáveis, usar todas
+    if selected_variables is None:
+        selected_variables = all_variables
+    
+    # Validar variáveis selecionadas
+    valid_vars = [v for v in selected_variables if v in all_variables]
+    if not valid_vars:
+        print(f"⚠️ Nenhuma variável selecionada válida. Disponíveis: {all_variables}")
+        return None
+    
+    print(f"📊 Lendo variáveis: {', '.join(valid_vars)}")
+    
+    # Mapear índices das variáveis selecionadas (após Step e Time)
+    var_indices = []
+    for var in valid_vars:
+        try:
+            idx = all_variables.index(var)
+            var_indices.append(idx)
+        except ValueError:
+            continue
+    
+    # Ler dados da tabela
+    data_rows = []
+    in_data = False
+    
+    with lis_path.open('r', errors='replace') as f:
+        for line in f:
+            # Procurar início da tabela de dados (após "Step      Time")
+            if 'Step' in line and 'Time' in line and not in_data:
+                # Pular linhas de cabeçalho até chegar aos dados numéricos
+                in_data = True
+                continue
+            
+            if in_data:
+                # Parar se encontrar linha vazia ou fim de arquivo
+                if line.strip() == '' or 'BLANK' in line.upper():
+                    break
+                
+                # Tentar extrair números da linha
+                parts = line.split()
+                if len(parts) >= 2 + len(all_variables):
+                    try:
+                        # Step e Time são as duas primeiras colunas
+                        step = int(parts[0])
+                        time = float(parts[1])
+                        
+                        # Extrair valores das variáveis selecionadas
+                        row = [step, time]
+                        for idx in var_indices:
+                            val = float(parts[2 + idx])  # +2 pois Step e Time vêm antes
+                            row.append(val)
+                        
+                        data_rows.append(row)
+                    except (ValueError, IndexError):
+                        continue
+    
+    if not data_rows:
+        print(f"⚠️ Nenhum dado encontrado em {lis_path.name}")
+        return None
+    
+    # Criar DataFrame
+    columns = ['Step', 'Time'] + valid_vars
+    df = pd.DataFrame(data_rows, columns=columns)
+    
+    print(f"✅ Lidos {len(df)} pontos de dados com {len(valid_vars)} variável(is)")
+    
+    return df
+
 # ---------- Parsing do .lis + extração de sumário ----------
 def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], Dict[str, Tuple[Optional[float], Optional[float]]]]:
     """
@@ -1003,6 +1126,12 @@ def main():
         _ = criar_grafico_a_partir_do_excel(excel_path, outdir, sim_index=idx, salvar_png=True, mostrar=False)
         excel_paths.append(excel_path)
 
+        # Salvar séries temporais
+        time_series_df = parse_lis_time_series(lis_path)
+        if time_series_df is not None:
+            save_time_series_to_excel(time_series_df, excel_path)
+            criar_grafico_series_temporais(time_series_df, outdir / f"series_temporais_{idx}.png", lis_name=lis_path.name)
+
     # Se houver múltiplos, cria gráfico comparativo sobreposto
     if len(excel_paths) > 1:
         print("Gerando gráfico comparativo sobreposto...")
@@ -1012,3 +1141,153 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ---------- Salvar séries temporais em Excel ----------
+def save_time_series_to_excel(df: pd.DataFrame, out_path: Path, sheet_name: str = 'Dados_Temporais'):
+    """
+    Salva DataFrame de séries temporais (Step, Time, Variáveis) em Excel com formatação.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Verificar se arquivo já existe (para adicionar aba)
+    if out_path.exists():
+        with pd.ExcelWriter(out_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    else:
+        with pd.ExcelWriter(out_path, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    
+    # Aplicar formatação profissional
+    wb = load_workbook(out_path)
+    ws = wb[sheet_name]
+    
+    # Estilos
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    
+    thin_border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    
+    # Formatar cabeçalhos
+    for i, col in enumerate(df.columns, start=1):
+        cell = ws.cell(row=1, column=i)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+        
+        # Autoajustar largura
+        if col in ['Step', 'Time']:
+            ws.column_dimensions[get_column_letter(i)].width = 12
+        else:
+            ws.column_dimensions[get_column_letter(i)].width = 15
+    
+    # Formatar células de dados
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row:
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center")
+            # Formato numérico para valores de tensão
+            if cell.column > 2:  # Não aplicar a Step e Time
+                cell.number_format = '0.000000'
+    
+    # Congelar painéis
+    ws.freeze_panes = ws['A2']
+    
+    # Filtros automáticos
+    ws.auto_filter.ref = ws.dimensions
+    
+    wb.save(out_path)
+    wb.close()
+    print(f"✅ Séries temporais salvas na aba '{sheet_name}' em: {out_path}")
+
+
+# ---------- Criar gráfico de séries temporais ----------
+def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: str = '', 
+                                   salvar_png: bool = True, mostrar: bool = False) -> Optional[Path]:
+    """
+    Cria gráfico com séries temporais das variáveis selecionadas.
+    
+    Args:
+        df: DataFrame com colunas Step, Time e variáveis
+        out_path: Caminho do arquivo PNG
+        lis_name: Nome do arquivo .lis (para título)
+        salvar_png: Se True, salva PNG
+        mostrar: Se True, exibe gráfico
+    
+    Returns:
+        Path do PNG salvo ou None
+    """
+    if df is None or df.empty:
+        print("⚠️ DataFrame vazio, não é possível criar gráfico")
+        return None
+    
+    # Identificar colunas de variáveis (excluir Step e Time)
+    var_cols = [col for col in df.columns if col not in ['Step', 'Time']]
+    
+    if not var_cols:
+        print("⚠️ Nenhuma variável encontrada no DataFrame")
+        return None
+    
+    # Criar figura
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    # Plotar cada variável
+    colors = plt.cm.tab10(range(len(var_cols)))
+    
+    for idx, var in enumerate(var_cols):
+        ax.plot(df['Time'], df[var], 
+                label=var, 
+                linewidth=1.5, 
+                color=colors[idx],
+                marker='o' if len(df) < 100 else None,
+                markersize=3 if len(df) < 100 else 0,
+                alpha=0.8)
+    
+    # Configurar eixos e título
+    ax.set_xlabel('Tempo (s)', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Tensão (V ou pu)', fontsize=12, fontweight='bold')
+    ax.set_title(f'Séries Temporais - {lis_name}' if lis_name else 'Séries Temporais', 
+                 fontsize=14, fontweight='bold', pad=20)
+    
+    # Grid e legenda
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.legend(loc='best', fontsize=10, framealpha=0.9)
+    
+    # Estatísticas na caixa de texto
+    stats_text = f"📊 Estatísticas:\n"
+    stats_text += f"• Pontos: {len(df)}\n"
+    stats_text += f"• Tempo: {df['Time'].min():.6f}s a {df['Time'].max():.6f}s\n"
+    stats_text += f"• Variáveis: {len(var_cols)}\n"
+    
+    for var in var_cols:
+        vmin = df[var].min()
+        vmax = df[var].max()
+        vmean = df[var].mean()
+        stats_text += f"• {var}: min={vmin:.3f}, max={vmax:.3f}, μ={vmean:.3f}\n"
+    
+    bbox_props = dict(boxstyle="round,pad=0.8", fc="white", ec="0.4", alpha=0.95)
+    ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='left', bbox=bbox_props,
+            fontfamily='monospace')
+    
+    plt.tight_layout()
+    
+    # Salvar
+    if salvar_png:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(out_path, dpi=220, bbox_inches='tight')
+        print(f"✅ Gráfico de séries temporais salvo em: {out_path}")
+    
+    # Mostrar
+    if mostrar:
+        plt.show()
+    else:
+        plt.close(fig)
+    
+    return out_path if salvar_png else None

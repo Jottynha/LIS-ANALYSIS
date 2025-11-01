@@ -18,6 +18,9 @@ try:
         escrever_estatisticas_excel,
         criar_grafico_a_partir_do_excel,
         criar_grafico_comparativo,
+        parse_lis_time_series,
+        save_time_series_to_excel,
+        criar_grafico_series_temporais,
     )
 except Exception:
     # fallback: erro será exibido quando tentar abrir GUI via main
@@ -133,6 +136,11 @@ class LisAnalysisApp:
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
         self.auto_organize_var = tk.BooleanVar(value=True)
+        
+        # Variáveis para seleção de variáveis do .lis
+        self.available_variables = []  # Lista de variáveis detectadas
+        self.variable_checkboxes = {}  # Dict: {var_name: BooleanVar}
+        self.variables_frame = None  # Frame que contém os checkboxes de variáveis
 
         self._load_prefs()
         self._build_menu()
@@ -208,8 +216,48 @@ class LisAnalysisApp:
         self.root.config(menu=menubar)
 
     def _build_ui(self):
-        container = ttk.Frame(self.root, padding=10)
-        container.pack(fill='both', expand=True)
+        # Frame principal com Canvas e Scrollbar
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Canvas para conter todo o conteúdo
+        canvas = tk.Canvas(main_frame, highlightthickness=0)
+        canvas.pack(side='left', fill='both', expand=True)
+        
+        # Scrollbar vertical
+        scrollbar = ttk.Scrollbar(main_frame, orient='vertical', command=canvas.yview)
+        scrollbar.pack(side='right', fill='y')
+        
+        # Configurar canvas com scrollbar
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Frame interno que conterá todos os widgets
+        container = ttk.Frame(canvas, padding=10)
+        canvas_window = canvas.create_window((0, 0), window=container, anchor='nw')
+        
+        # Atualizar scroll region quando o tamanho mudar
+        def _on_frame_configure(event=None):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        
+        def _on_canvas_configure(event):
+            # Ajustar largura do frame interno para preencher o canvas
+            canvas.itemconfig(canvas_window, width=event.width)
+        
+        container.bind('<Configure>', _on_frame_configure)
+        canvas.bind('<Configure>', _on_canvas_configure)
+        
+        # Suporte para scroll com mouse wheel
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+        
+        def _bind_mousewheel(event):
+            canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        
+        def _unbind_mousewheel(event):
+            canvas.unbind_all('<MouseWheel>')
+        
+        canvas.bind('<Enter>', _bind_mousewheel)
+        canvas.bind('<Leave>', _unbind_mousewheel)
 
         # Linha 1: Pastas e índice
         row1 = ttk.LabelFrame(container, text='⚙️ Configurações', padding=(10,8), style='Card.TLabelframe')
@@ -288,6 +336,27 @@ class LisAnalysisApp:
         chk8 = ttk.Checkbutton(chk_col4, text='♻️ Sobrescrever', variable=self.overwrite_var)
         chk8.pack(anchor='w', pady=2)
         _Tooltip(chk8, 'Substitui arquivos existentes')
+
+        # Linha 1.7: Seleção de Variáveis do .lis (NOVA SEÇÃO DINÂMICA)
+        row1_7 = ttk.LabelFrame(container, text='📊 Variáveis do Arquivo .lis', padding=(10,8), style='Card.TLabelframe')
+        row1_7.pack(fill='x', pady=(8,0))
+        
+        # Frame interno para os checkboxes de variáveis
+        self.variables_frame = ttk.Frame(row1_7)
+        self.variables_frame.pack(fill='both', expand=True)
+        
+        # Mensagem inicial (será substituída quando variáveis forem detectadas)
+        self.variables_label = ttk.Label(
+            self.variables_frame, 
+            text='💡 Selecione um arquivo .lis para detectar variáveis disponíveis',
+            foreground='gray'
+        )
+        self.variables_label.pack(pady=10)
+        
+        # Botão para detectar variáveis
+        btn_detect = ttk.Button(row1_7, text='🔍 Detectar Variáveis', command=self._detect_variables)
+        btn_detect.pack(pady=(5,0))
+        _Tooltip(btn_detect, 'Analisa o primeiro arquivo selecionado para detectar variáveis')
 
         # Linha 2: Filtro
         row2 = ttk.Frame(container, padding=(0,4,0,0))
@@ -449,6 +518,111 @@ class LisAnalysisApp:
         self._populate_tree()
         self.status_var.set(f"{len(self._files_cache)} arquivo(s) encontrado(s) em {folder}.")
 
+    def _detect_variables(self):
+        """Detecta variáveis do primeiro arquivo .lis selecionado e cria checkboxes."""
+        from main import parse_lis_output_variables
+        
+        # Pegar arquivo selecionado ou o primeiro da lista
+        sels = self.tv.selection()
+        if sels:
+            lis_path = Path(sels[0])
+        elif self._files_cache:
+            lis_path = self._files_cache[0]
+        else:
+            messagebox.showwarning('Aviso', 'Nenhum arquivo .lis encontrado.\n\nSelecione uma pasta com arquivos .lis primeiro.')
+            return
+        
+        try:
+            # Detectar variáveis
+            self.status_var.set(f'Detectando variáveis de {lis_path.name}...')
+            self.root.update_idletasks()
+            
+            variables = parse_lis_output_variables(lis_path)
+            
+            if not variables:
+                messagebox.showinfo('Info', 'Nenhuma variável detectada no arquivo.\n\nVerifique se o arquivo .lis contém a seção "Column headings".')
+                self.status_var.set('Pronto.')
+                return
+            
+            # Limpar checkboxes anteriores
+            for widget in self.variables_frame.winfo_children():
+                widget.destroy()
+            
+            self.available_variables = variables
+            self.variable_checkboxes.clear()
+            
+            # Criar título
+            title_label = ttk.Label(
+                self.variables_frame,
+                text=f'✅ {len(variables)} variável(is) detectada(s) — Selecione as que deseja analisar:',
+                font=('TkDefaultFont', 9, 'bold'),
+                foreground='#2F75B5'
+            )
+            title_label.pack(anchor='w', pady=(0, 5))
+            
+            # Frame para os checkboxes (layout em colunas)
+            chk_container = ttk.Frame(self.variables_frame)
+            chk_container.pack(fill='both', expand=True)
+            
+            # Determinar número de colunas (4 ou menos se houver poucas variáveis)
+            num_cols = min(4, max(2, len(variables)))
+            cols_frames = []
+            for i in range(num_cols):
+                col_frame = ttk.Frame(chk_container)
+                col_frame.pack(side='left', fill='both', expand=True, padx=2)
+                cols_frames.append(col_frame)
+            
+            # Distribuir checkboxes entre as colunas
+            for idx, var in enumerate(variables):
+                col_idx = idx % num_cols
+                var_checkbox = tk.BooleanVar(value=True)  # Todas selecionadas por padrão
+                self.variable_checkboxes[var] = var_checkbox
+                
+                chk = ttk.Checkbutton(
+                    cols_frames[col_idx],
+                    text=f'📌 {var}',
+                    variable=var_checkbox
+                )
+                chk.pack(anchor='w', pady=1)
+                _Tooltip(chk, f'Incluir variável "{var}" na análise')
+            
+            # Botões de controle
+            btn_frame = ttk.Frame(self.variables_frame)
+            btn_frame.pack(fill='x', pady=(8, 0))
+            
+            ttk.Button(
+                btn_frame,
+                text='✓ Selecionar Todas',
+                command=lambda: self._toggle_all_variables(True)
+            ).pack(side='left', padx=2)
+            
+            ttk.Button(
+                btn_frame,
+                text='✗ Desmarcar Todas',
+                command=lambda: self._toggle_all_variables(False)
+            ).pack(side='left', padx=2)
+            
+            self.status_var.set(f'✅ {len(variables)} variável(is) detectada(s) em {lis_path.name}')
+            messagebox.showinfo(
+                'Variáveis Detectadas',
+                f'✅ {len(variables)} variável(is) encontrada(s):\n\n' + 
+                ', '.join(variables) +
+                '\n\nTodas foram selecionadas por padrão.\nDesmarque as que não deseja analisar.'
+            )
+            
+        except Exception as e:
+            messagebox.showerror('Erro', f'Falha ao detectar variáveis:\n\n{str(e)}')
+            self.status_var.set('Erro ao detectar variáveis.')
+            import traceback
+            traceback.print_exc()
+
+    def _toggle_all_variables(self, state: bool):
+        """Marca ou desmarca todas as variáveis."""
+        for var_bool in self.variable_checkboxes.values():
+            var_bool.set(state)
+        action = 'selecionadas' if state else 'desmarcadas'
+        self.status_var.set(f'{len(self.variable_checkboxes)} variável(is) {action}.')
+
     def _populate_tree(self):
         for iid in self.tv.get_children(''):
             self.tv.delete(iid)
@@ -511,6 +685,18 @@ class LisAnalysisApp:
         save_logs = self.save_logs_var.get()
         overwrite = self.overwrite_var.get()
         
+        # 🆕 CAPTURAR VARIÁVEIS SELECIONADAS
+        selected_variables = None
+        if self.variable_checkboxes:
+            selected_variables = [var for var, boolvar in self.variable_checkboxes.items() if boolvar.get()]
+            if not selected_variables:
+                messagebox.showwarning('Aviso', 
+                    'Nenhuma variável selecionada!\n\n' +
+                    'Por favor, selecione pelo menos uma variável para analisar ou\n' +
+                    'deixe a seção de variáveis vazia para processar modo tradicional (estatísticas de picos).')
+                return
+            print(f"📊 Variáveis selecionadas para análise: {', '.join(selected_variables)}")
+        
         log_lines = []
 
         def worker():
@@ -536,6 +722,8 @@ class LisAnalysisApp:
                     log_lines.append(f"  - Apenas comparativo: {only_comparative}")
                     log_lines.append(f"  - Salvar logs: {save_logs}")
                     log_lines.append(f"  - Sobrescrever: {overwrite}")
+                    if selected_variables:
+                        log_lines.append(f"  - Variáveis selecionadas: {', '.join(selected_variables)}")
                     log_lines.append("")
                 
                 for i, lp in enumerate(paths, start=1):
@@ -558,62 +746,97 @@ class LisAnalysisApp:
                         idx += 1
                         continue
                     
-                    # parse
-                    try:
-                        df, stats_lines, summary_from_lis = parse_lis_table(lp)
-                        if save_logs:
-                            log_lines.append(f"  [OK] Parsing concluído")
-                    except Exception as e:
-                        if save_logs:
-                            log_lines.append(f"  [ERRO] Falha ao fazer parsing: {str(e)}")
-                        continue
-                    
-                    if df is None:
-                        if save_logs:
-                            log_lines.append(f"  [ERRO] DataFrame vazio")
-                        continue
-                    
-                    # Salvar Excel
-                    try:
-                        save_df_to_excel_only(df, excel_path)
-                        if save_logs:
-                            log_lines.append(f"  [OK] Excel salvo")
-                    except Exception as e:
-                        if save_logs:
-                            log_lines.append(f"  [ERRO] Falha ao salvar Excel: {str(e)}")
-                        continue
-                    
-                    # Calcular estatísticas
-                    try:
-                        computed_stats = calcular_estatisticas_do_df(df)
-                        if save_logs:
-                            log_lines.append(f"  [OK] Estatísticas calculadas")
-                    except Exception as e:
-                        computed_stats = {}
-                        if save_logs:
-                            log_lines.append(f"  [AVISO] Falha ao calcular estatísticas: {str(e)}")
-                    
-                    # Escrever estatísticas no Excel
-                    try:
-                        escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary_from_lis)
-                        if save_logs:
-                            log_lines.append(f"  [OK] Estatísticas salvas")
-                    except Exception as e:
-                        if save_logs:
-                            log_lines.append(f"  [AVISO] Falha ao escrever estatísticas: {str(e)}")
-                    
-                    # Gerar gráficos (opcional)
-                    if not only_comparative:
+                    # 🆕 PROCESSAMENTO BASEADO EM VARIÁVEIS SELECIONADAS
+                    if selected_variables:
+                        # MODO 1: Análise de séries temporais (novas variáveis)
                         try:
-                            criar_grafico_a_partir_do_excel(excel_path, outp, sim_index=idx, salvar_png=True, mostrar=False)
+                            df_time_series = parse_lis_time_series(lp, selected_variables)
                             if save_logs:
-                                log_lines.append(f"  [OK] Gráfico individual gerado")
+                                log_lines.append(f"  [OK] Parsing de séries temporais concluído")
+                            
+                            if df_time_series is not None and not df_time_series.empty:
+                                # Salvar séries temporais no Excel
+                                save_time_series_to_excel(df_time_series, excel_path, sheet_name='Dados_Temporais')
+                                if save_logs:
+                                    log_lines.append(f"  [OK] Séries temporais salvas no Excel")
+                                
+                                # Criar gráfico de séries temporais
+                                if not only_comparative:
+                                    png_path = outp / f"series_temporais_{idx}.png"
+                                    criar_grafico_series_temporais(
+                                        df_time_series, 
+                                        png_path, 
+                                        lis_name=lp.stem,
+                                        salvar_png=True, 
+                                        mostrar=show_plots
+                                    )
+                                    if save_logs:
+                                        log_lines.append(f"  [OK] Gráfico de séries temporais gerado")
+                            else:
+                                if save_logs:
+                                    log_lines.append(f"  [AVISO] DataFrame de séries temporais vazio")
                         except Exception as e:
                             if save_logs:
-                                log_lines.append(f"  [AVISO] Falha ao gerar gráfico: {str(e)}")
+                                log_lines.append(f"  [ERRO] Falha no processamento de séries temporais: {str(e)}")
+                            import traceback
+                            traceback.print_exc()
                     else:
-                        if save_logs:
-                            log_lines.append(f"  [PULADO] Gráfico individual (modo comparativo ativado)")
+                        # MODO 2: Análise tradicional de estatísticas de picos (modo original)
+                        try:
+                            df, stats_lines, summary_from_lis = parse_lis_table(lp)
+                            if save_logs:
+                                log_lines.append(f"  [OK] Parsing tradicional concluído")
+                        except Exception as e:
+                            if save_logs:
+                                log_lines.append(f"  [ERRO] Falha ao fazer parsing: {str(e)}")
+                            continue
+                        
+                        if df is None:
+                            if save_logs:
+                                log_lines.append(f"  [ERRO] DataFrame vazio")
+                            continue
+                        
+                        # Salvar Excel
+                        try:
+                            save_df_to_excel_only(df, excel_path)
+                            if save_logs:
+                                log_lines.append(f"  [OK] Excel salvo")
+                        except Exception as e:
+                            if save_logs:
+                                log_lines.append(f"  [ERRO] Falha ao salvar Excel: {str(e)}")
+                            continue
+                        
+                        # Calcular estatísticas
+                        try:
+                            computed_stats = calcular_estatisticas_do_df(df)
+                            if save_logs:
+                                log_lines.append(f"  [OK] Estatísticas calculadas")
+                        except Exception as e:
+                            computed_stats = {}
+                            if save_logs:
+                                log_lines.append(f"  [AVISO] Falha ao calcular estatísticas: {str(e)}")
+                        
+                        # Escrever estatísticas no Excel
+                        try:
+                            escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary_from_lis)
+                            if save_logs:
+                                log_lines.append(f"  [OK] Estatísticas salvas")
+                        except Exception as e:
+                            if save_logs:
+                                log_lines.append(f"  [AVISO] Falha ao escrever estatísticas: {str(e)}")
+                        
+                        # Gerar gráficos (opcional)
+                        if not only_comparative:
+                            try:
+                                criar_grafico_a_partir_do_excel(excel_path, outp, sim_index=idx, salvar_png=True, mostrar=False)
+                                if save_logs:
+                                    log_lines.append(f"  [OK] Gráfico individual gerado")
+                            except Exception as e:
+                                if save_logs:
+                                    log_lines.append(f"  [AVISO] Falha ao gerar gráfico: {str(e)}")
+                        else:
+                            if save_logs:
+                                log_lines.append(f"  [PULADO] Gráfico individual (modo comparativo ativado)")
                     
                     excel_paths.append(excel_path)
                     idx += 1
@@ -621,8 +844,8 @@ class LisAnalysisApp:
                     pct = int(i * 100 / max(1, total))
                     self.progress_var.set(pct)
                 
-                # Gráfico comparativo
-                if not self.cancel_event.is_set() and len(excel_paths) > 1:
+                # Gráfico comparativo (apenas para modo tradicional)
+                if not self.cancel_event.is_set() and len(excel_paths) > 1 and not selected_variables:
                     self.status_var.set('Gerando gráfico comparativo…')
                     if save_logs:
                         log_lines.append(f"\n[COMPARATIVO] {len(excel_paths)} arquivos")

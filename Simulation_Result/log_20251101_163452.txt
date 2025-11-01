@@ -1,0 +1,17 @@
+=== Processamento iniciado em 2025-11-01 16:34:52 ===
+Pasta de entrada: /home/joao/Projetos/6º Periodo/Eletrônica/LIS-ANALYSIS/Listas ATP/CONVENCIONAL
+Pasta de saída: /home/joao/Projetos/6º Periodo/Eletrônica/LIS-ANALYSIS/Simulation_Result
+Arquivos selecionados: 1
+Índice inicial: 1
+Opções:
+  - Mostrar gráficos: False
+  - Abrir pasta ao concluir: False
+  - Apenas comparativo: False
+  - Salvar logs: True
+  - Sobrescrever: False
+
+[1/1] Caso0_ReEnergizacao_Convenc_RPI=100 e RF=30.LIS
+  [PULADO] Arquivo já existe (sobrescrita desativada)
+
+=== Concluído em 2025-11-01 16:34:52 ===
+Total processado: 0/1

@@ -16,6 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from openpyxl.utils import get_column_letter
 from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ------------------ Configurações e regex ------------------
 START_MARKER = "The following is a distribution of peak overvoltages"
@@ -108,7 +109,12 @@ def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], 
 
 def save_df_to_excel_only(df: pd.DataFrame, out_path: Path, sheet_name: str = 'Dados'):
     """
-    Salva somente o DataFrame na aba 'Dados' (com tradução de cabeçalhos).
+    Salva o DataFrame na aba 'Dados' com formatação profissional:
+    - Cabeçalhos com negrito e fundo azul claro
+    - Autoajuste de colunas
+    - Congelar painéis no cabeçalho
+    - Filtros automáticos
+    - Bordas nas células
     """
     mapping = {
         'Interval': 'Intervalo',
@@ -124,18 +130,52 @@ def save_df_to_excel_only(df: pd.DataFrame, out_path: Path, sheet_name: str = 'D
     with pd.ExcelWriter(out_path, engine='openpyxl') as writer:
         df_to_save.to_excel(writer, sheet_name=sheet_name, index=False)
 
-    # ajustar larguras de coluna
+    # Aplicar formatação profissional
     wb = load_workbook(out_path)
     ws = wb[sheet_name]
+    
+    # Estilos
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    
+    thin_border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    
+    # Formatar cabeçalhos
     for i, col in enumerate(df_to_save.columns, start=1):
+        cell = ws.cell(row=1, column=i)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        cell.border = thin_border
+        
+        # Autoajustar largura das colunas
         try:
             max_len = max(df_to_save[col].astype(str).map(len).max(), len(col)) + 2
         except Exception:
             max_len = len(col) + 2
-        ws.column_dimensions[get_column_letter(i)].width = max_len
+        ws.column_dimensions[get_column_letter(i)].width = min(max_len, 30)  # Máximo de 30
+    
+    # Formatar células de dados
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row:
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center" if cell.column > 1 else "left")
+    
+    # Congelar painéis (primeira linha)
+    ws.freeze_panes = ws['A2']
+    
+    # Adicionar filtros automáticos
+    ws.auto_filter.ref = ws.dimensions
+    
     wb.save(out_path)
     wb.close()
-    print(f"Excel (aba '{sheet_name}') salvo em: {out_path}")
+    print(f"✅ Excel (aba '{sheet_name}') salvo com formatação profissional em: {out_path}")
 
 # ------------------ Calcular estatísticas a partir dos bins (ponderadas) ------------------
 
@@ -272,125 +312,174 @@ def escrever_estatisticas_excel(excel_path: Path, computed_stats: dict,
                                 summary_from_lis: Dict[str, Tuple[Optional[float], Optional[float]]] = None,
                                 sheet_name: str = 'Estatisticas'):
     """
-    Escreve:
-     - Se summary_from_lis fornecido: cria tabela 'Métrica | Grouped | Ungrouped' com Mean/Variance/StdDev vindos do .lis.
-     - Abaixo, escreve os computed_stats (média ponderada, etc.) em uma linha com cabeçalhos legíveis.
-     - Também escreve versão legível 2-colunas para facilidade.
+    Escreve estatísticas com formatação profissional em layout compacto lado a lado:
+    - Tabela do .lis (se houver) à esquerda
+    - Estatísticas computadas à direita
+    - Formatação com cores, negrito e bordas
     """
     if not excel_path.exists():
         raise FileNotFoundError(f"Arquivo Excel não encontrado: {excel_path}")
 
     wb = load_workbook(excel_path)
-    # remove aba antiga se existir
     if sheet_name in wb.sheetnames:
         wb.remove(wb[sheet_name])
     ws = wb.create_sheet(title=sheet_name)
 
+    # Estilos
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    data_font = Font(size=10)
+    
+    title_font = Font(bold=True, size=12, color="2F75B5")
+    
+    thin_border = Border(
+        left=Side(style='thin', color='D3D3D3'),
+        right=Side(style='thin', color='D3D3D3'),
+        top=Side(style='thin', color='D3D3D3'),
+        bottom=Side(style='thin', color='D3D3D3')
+    )
+    
+    center_alignment = Alignment(horizontal="center", vertical="center")
+    left_alignment = Alignment(horizontal="left", vertical="center")
+
     row = 1
-    # 1) se existe summary_from_lis, escreve-a como tabela Grouped/Ungrouped
+    
+    # SEÇÃO 1: Estatísticas do .lis (se existirem) - COLUNA A-C
     if summary_from_lis:
-        ws.cell(row=row, column=1, value='Métrica (do .lis)')
-        ws.cell(row=row, column=2, value='Grouped')
-        ws.cell(row=row, column=3, value='Ungrouped')
+        # Título
+        cell = ws.cell(row=row, column=1, value='📊 Estatísticas do Arquivo .lis')
+        cell.font = title_font
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
         row += 1
-        # escrever Mean, Variance, Standard deviation (se existirem)
-        for key, pretty in [('mean', 'Mean'), ('variance', 'Variance'), ('std_dev', 'Standard deviation')]:
+        
+        # Cabeçalhos
+        for col, text in [(1, 'Métrica'), (2, 'Grouped'), (3, 'Ungrouped')]:
+            cell = ws.cell(row=row, column=col, value=text)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center_alignment
+            cell.border = thin_border
+        row += 1
+        
+        # Dados
+        for key, pretty in [('mean', 'Média'), ('variance', 'Variância'), ('std_dev', 'Desvio Padrão')]:
             if key in summary_from_lis:
                 g, u = summary_from_lis.get(key, (None, None))
-                ws.cell(row=row, column=1, value=pretty)
-                # grouped
+                
+                # Métrica
+                cell = ws.cell(row=row, column=1, value=pretty)
+                cell.font = data_font
+                cell.alignment = left_alignment
+                cell.border = thin_border
+                
+                # Grouped
+                cell = ws.cell(row=row, column=2)
                 if g is not None:
-                    c = ws.cell(row=row, column=2, value=float(g))
-                    # escolhendo formatando científico para média/var/std, decimal para outros
-                    c.number_format = '0.000000E+00' if key in ('mean', 'variance', 'std_dev') else '0.######'
-                else:
-                    ws.cell(row=row, column=2, value=None)
-                # ungrouped (não agrupado)
+                    cell.value = float(g)
+                    cell.number_format = '0.000000E+00'
+                cell.font = data_font
+                cell.alignment = center_alignment
+                cell.border = thin_border
+                
+                # Ungrouped
+                cell = ws.cell(row=row, column=3)
                 if u is not None:
-                    c2 = ws.cell(row=row, column=3, value=float(u))
-                    c2.number_format = '0.000000E+00' if key in ('mean', 'variance', 'std_dev') else '0.######'
-                else:
-                    ws.cell(row=row, column=3, value=None)
+                    cell.value = float(u)
+                    cell.number_format = '0.000000E+00'
+                cell.font = data_font
+                cell.alignment = center_alignment
+                cell.border = thin_border
+                
                 row += 1
-        # espaço antes da seção de computed stats
-        row += 1
+        
+        row += 1  # Espaço
 
-    # 2) escreve computed_stats com cabeçalhos legíveis na mesma aba (linha de cabeçalho + valores)
-    # Ordem e nomes legíveis
+    # SEÇÃO 2: Estatísticas Computadas - LAYOUT COMPACTO (2 COLUNAS)
+    start_row_computed = row
+    
+    # Título
+    cell = ws.cell(row=row, column=1, value='🔬 Estatísticas Computadas')
+    cell.font = title_font
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    row += 1
+    
+    # Cabeçalhos
+    for col, text in [(1, 'Métrica'), (2, 'Valor')]:
+        cell = ws.cell(row=row, column=col, value=text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_alignment
+        cell.border = thin_border
+    row += 1
+    
+    # Preparar dados
     keys_order = [
         'mean', 'variance', 'std_dev', 'median', 'mode',
         'total_freq', 'cv', 'skewness', 'kurtosis', 'r2', 'freq_method'
     ]
     pretty_names = {
-        'mean': 'Média (μ) [computed]',
-        'variance': 'Variância [computed]',
-        'std_dev': 'Desvio padrão (σ) [computed]',
+        'mean': 'Média (μ)',
+        'variance': 'Variância (σ²)',
+        'std_dev': 'Desvio Padrão (σ)',
         'median': 'Mediana',
         'mode': 'Moda',
-        'total_freq': 'Soma das frequências',
-        'cv': 'Coeficiente de variação (CV)',
-        'skewness': 'Assimetria (skewness)',
+        'total_freq': 'Σ Frequências',
+        'cv': 'Coef. Variação (CV)',
+        'skewness': 'Assimetria',
         'kurtosis': 'Curtose',
-        'r2': 'R² do ajuste',
-        'freq_method': 'Método frequência'
+        'r2': 'R² Ajuste',
+        'freq_method': 'Método'
     }
-    present_keys = [k for k in keys_order if k in computed_stats] + [k for k in computed_stats.keys() if k not in keys_order]
-
-    # cabeçalho
-    for col_idx, key in enumerate(present_keys, start=1):
-        ws.cell(row=row, column=col_idx, value=pretty_names.get(key, key))
-    row += 1
-    # valores
     number_formats = {
-        'mean': '0.000000E+00',
+        'mean': '0.000000',
         'variance': '0.000000E+00',
-        'std_dev': '0.000000E+00',
+        'std_dev': '0.000000',
         'median': '0.000000',
         'mode': '0.000000',
-        'total_freq': '0.#####',
-        'cv': '0.000000',
-        'skewness': '0.000000',
-        'kurtosis': '0.000000',
-        'r2': '0.000000'
+        'total_freq': '0',
+        'cv': '0.0000',
+        'skewness': '0.0000',
+        'kurtosis': '0.0000',
+        'r2': '0.0000'
     }
-    for col_idx, key in enumerate(present_keys, start=1):
+    
+    present_keys = [k for k in keys_order if k in computed_stats]
+    
+    # Escrever dados
+    for key in present_keys:
+        # Métrica
+        cell = ws.cell(row=row, column=1, value=pretty_names.get(key, key))
+        cell.font = data_font
+        cell.alignment = left_alignment
+        cell.border = thin_border
+        
+        # Valor
+        cell = ws.cell(row=row, column=2)
         val = computed_stats.get(key)
-        cell = ws.cell(row=row, column=col_idx)
         if isinstance(val, (int, float)) and not (isinstance(val, float) and np.isnan(val)):
             cell.value = float(val)
             fmt = number_formats.get(key)
             if fmt:
                 cell.number_format = fmt
         else:
-            cell.value = str(val)
-    row += 2
-
-    # 3) versão legível em duas colunas (Métrica | Valor) como redundância (começa em row atual)
-    ws.cell(row=row, column=1, value='Métrica')
-    ws.cell(row=row, column=2, value='Valor')
-    row += 1
-    # combinar summary_from_lis and computed stats 
-    if summary_from_lis:
-        # escrever Mean/Variance/Std (grouped/ungrouped) em texto legível
-        for key, pretty in [('mean', 'Mean'), ('variance', 'Variance'), ('std_dev', 'Standard deviation')]:
-            if key in summary_from_lis:
-                g, u = summary_from_lis.get(key, (None, None))
-                ws.cell(row=row, column=1, value=f'{pretty} (grouped)')
-                ws.cell(row=row, column=2, value=g if g is not None else '')
-                row += 1
-                ws.cell(row=row, column=1, value=f'{pretty} (ungrouped)')
-                ws.cell(row=row, column=2, value=u if u is not None else '')
-                row += 1
-    # escrever computed_stats também
-    for key in present_keys:
-        ws.cell(row=row, column=1, value=pretty_names.get(key, key))
-        val = computed_stats.get(key)
-        ws.cell(row=row, column=2, value=val)
+            cell.value = str(val) if val else '-'
+        cell.font = data_font
+        cell.alignment = center_alignment
+        cell.border = thin_border
+        
         row += 1
-
+    
+    # Ajustar larguras das colunas
+    ws.column_dimensions['A'].width = 25
+    ws.column_dimensions['B'].width = 18
+    ws.column_dimensions['C'].width = 18
+    
+    # Congelar painéis
+    ws.freeze_panes = ws['A3'] if summary_from_lis else ws['A' + str(start_row_computed + 2)]
+    
     wb.save(excel_path)
     wb.close()
-    print(f"Estatísticas salvas na aba '{sheet_name}' do Excel: {excel_path}")
+    print(f"✅ Estatísticas salvas com formatação profissional na aba '{sheet_name}'")
 
 # ------------------ Função do gráfico (lê o Excel gerado) ------------------
 

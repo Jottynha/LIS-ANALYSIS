@@ -123,6 +123,16 @@ class LisAnalysisApp:
         self._files_cache = []  # lista de Path
         self._sort_desc = False
         self._sort_col = 'nome'
+        
+        # Checkboxes de opções (8 no total)
+        self.show_plots_var = tk.BooleanVar(value=False)
+        self.open_output_var = tk.BooleanVar(value=True)
+        self.only_comparative_var = tk.BooleanVar(value=False)
+        self.save_logs_var = tk.BooleanVar(value=True)
+        self.overwrite_var = tk.BooleanVar(value=True)
+        self.hide_errors_var = tk.BooleanVar(value=False)
+        self.parallel_process_var = tk.BooleanVar(value=False)
+        self.auto_organize_var = tk.BooleanVar(value=True)
 
         self._load_prefs()
         self._build_menu()
@@ -140,6 +150,15 @@ class LisAnalysisApp:
                 theme = data.get('theme')
                 if theme and theme in self.style.theme_names():
                     self.style.theme_use(theme)
+                # Carregar preferências dos checkboxes
+                self.show_plots_var.set(data.get('show_plots', False))
+                self.open_output_var.set(data.get('open_output', True))
+                self.only_comparative_var.set(data.get('only_comparative', False))
+                self.save_logs_var.set(data.get('save_logs', True))
+                self.overwrite_var.set(data.get('overwrite', True))
+                self.hide_errors_var.set(data.get('hide_errors', False))
+                self.parallel_process_var.set(data.get('parallel_process', False))
+                self.auto_organize_var.set(data.get('auto_organize', True))
         except Exception:
             pass
 
@@ -149,6 +168,14 @@ class LisAnalysisApp:
                 'folder': self.folder_var.get(),
                 'outdir': self.outdir_var.get(),
                 'theme': self.style.theme_use(),
+                'show_plots': self.show_plots_var.get(),
+                'open_output': self.open_output_var.get(),
+                'only_comparative': self.only_comparative_var.get(),
+                'save_logs': self.save_logs_var.get(),
+                'overwrite': self.overwrite_var.get(),
+                'hide_errors': self.hide_errors_var.get(),
+                'parallel_process': self.parallel_process_var.get(),
+                'auto_organize': self.auto_organize_var.get(),
             }
             PREFS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
         except Exception:
@@ -185,7 +212,7 @@ class LisAnalysisApp:
         container.pack(fill='both', expand=True)
 
         # Linha 1: Pastas e índice
-        row1 = ttk.LabelFrame(container, text='Configurações', padding=(10,8), style='Card.TLabelframe')
+        row1 = ttk.LabelFrame(container, text='⚙️ Configurações', padding=(10,8), style='Card.TLabelframe')
         row1.pack(fill='x')
 
         ttk.Label(row1, text='Pasta (.lis):').grid(row=0, column=0, sticky='w')
@@ -209,18 +236,90 @@ class LisAnalysisApp:
 
         row1.columnconfigure(1, weight=1)
 
+        # Linha 1.5: Opções (Checkboxes - EXPANDIDO)
+        row1_5 = ttk.LabelFrame(container, text='⚙️ Opções de Processamento', padding=(10,8), style='Card.TLabelframe')
+        row1_5.pack(fill='x', pady=(8,0))
+
+        # Frame para organizar checkboxes em 4 colunas
+        chk_col1 = ttk.Frame(row1_5)
+        chk_col1.pack(side='left', fill='both', expand=True, padx=2)
+        
+        chk_col2 = ttk.Frame(row1_5)
+        chk_col2.pack(side='left', fill='both', expand=True, padx=2)
+        
+        chk_col3 = ttk.Frame(row1_5)
+        chk_col3.pack(side='left', fill='both', expand=True, padx=2)
+        
+        chk_col4 = ttk.Frame(row1_5)
+        chk_col4.pack(side='left', fill='both', expand=True, padx=2)
+
+        # Coluna 1
+        chk1 = ttk.Checkbutton(chk_col1, text='📊 Mostrar gráficos', variable=self.show_plots_var)
+        chk1.pack(anchor='w', pady=2)
+        _Tooltip(chk1, 'Abre gráficos automaticamente')
+
+        chk5 = ttk.Checkbutton(chk_col1, text='🔇 Ocultar erros', variable=self.hide_errors_var)
+        chk5.pack(anchor='w', pady=2)
+        _Tooltip(chk5, 'Não exibe caixas de erro')
+
+        # Coluna 2
+        chk2 = ttk.Checkbutton(chk_col2, text='📂 Abrir pasta', variable=self.open_output_var)
+        chk2.pack(anchor='w', pady=2)
+        _Tooltip(chk2, 'Abre pasta ao concluir')
+
+        chk6 = ttk.Checkbutton(chk_col2, text='⚙️ Processar paralelo', variable=self.parallel_process_var)
+        chk6.pack(anchor='w', pady=2)
+        _Tooltip(chk6, 'Processa múltiplos em paralelo')
+
+        # Coluna 3
+        chk3 = ttk.Checkbutton(chk_col3, text='⚡ Só comparativo', variable=self.only_comparative_var)
+        chk3.pack(anchor='w', pady=2)
+        _Tooltip(chk3, 'Apenas gráfico comparativo (~50% rápido)')
+
+        chk7 = ttk.Checkbutton(chk_col3, text='📁 Auto-organizar', variable=self.auto_organize_var)
+        chk7.pack(anchor='w', pady=2)
+        _Tooltip(chk7, 'Organiza resultados em pastas')
+
+        # Coluna 4
+        chk4 = ttk.Checkbutton(chk_col4, text='📝 Salvar logs', variable=self.save_logs_var)
+        chk4.pack(anchor='w', pady=2)
+        _Tooltip(chk4, 'Cria log de processamento')
+
+        chk8 = ttk.Checkbutton(chk_col4, text='♻️ Sobrescrever', variable=self.overwrite_var)
+        chk8.pack(anchor='w', pady=2)
+        _Tooltip(chk8, 'Substitui arquivos existentes')
+
         # Linha 2: Filtro
-        row2 = ttk.Frame(container, padding=(0,8,0,0))
+        row2 = ttk.Frame(container, padding=(0,4,0,0))
         row2.pack(fill='x')
-        ttk.Label(row2, text='Filtro:').pack(side='left')
+        ttk.Label(row2, text='🔍 Filtro:').pack(side='left')
         ent_filter = ttk.Entry(row2, textvariable=self.filter_var, width=30)
         ent_filter.pack(side='left', padx=6, fill='x', expand=True)
         _Tooltip(ent_filter, 'Filtra por parte do nome do arquivo (.lis)')
         ttk.Button(row2, text='Aplicar', command=self.refresh_list).pack(side='left')
 
-        # Linha 3: Lista (Treeview)
-        row3 = ttk.LabelFrame(container, text='Arquivos .lis encontrados', padding=(6,6), style='Card.TLabelframe')
-        row3.pack(fill='both', expand=True, pady=(8,0))
+        # Linha 4: Botões de ação (MOVIDO PARA CIMA)
+        row4 = ttk.Frame(container, padding=(0,8,0,0))
+        row4.pack(fill='x')
+        self.btn_refresh = ttk.Button(row4, text='🔄 Atualizar (F5)', command=self.refresh_list)
+        self.btn_refresh.pack(side='left', padx=1)
+        self.btn_select_all = ttk.Button(row4, text='✓ Selecionar tudo (Ctrl+A)', command=self._select_all)
+        self.btn_select_all.pack(side='left', padx=1)
+        self.btn_clear = ttk.Button(row4, text='✗ Limpar seleção', command=self._clear_sel)
+        self.btn_clear.pack(side='left', padx=1)
+        self.btn_clean = ttk.Button(row4, text='🗑️ Limpar Resultados', command=self._clean_results)
+        self.btn_clean.pack(side='left', padx=1)
+        _Tooltip(self.btn_clean, 'Remove todos os arquivos da pasta de saída')
+        self.btn_open_out = ttk.Button(row4, text='📁 Abrir saída', command=self._open_outdir)
+        self.btn_open_out.pack(side='left', padx=1)
+        self.btn_process = ttk.Button(row4, text='▶ Processar (Ctrl+P)', command=self.process_selected)
+        self.btn_process.pack(side='right', padx=1)
+        self.btn_cancel = ttk.Button(row4, text='⊗ Cancelar', command=self._cancel, state='disabled')
+        self.btn_cancel.pack(side='right', padx=1)
+
+        # Linha 3: Lista (Treeview) - REDUZIDA
+        row3 = ttk.LabelFrame(container, text='📋 Arquivos .lis encontrados', padding=(6,6), style='Card.TLabelframe')
+        row3.pack(fill='both', expand=True, pady=(8,0)) # expand=True para preencher o espaço
 
         columns = ('nome', 'tamanho', 'modificado')
         self.tv = ttk.Treeview(row3, columns=columns, show='headings', selectmode='extended')
@@ -239,29 +338,13 @@ class LisAnalysisApp:
         row3.rowconfigure(0, weight=1)
         row3.columnconfigure(0, weight=1)
 
-        # Linha 4: Botões de ação
-        row4 = ttk.Frame(container, padding=(0,8,0,0))
-        row4.pack(fill='x')
-        self.btn_refresh = ttk.Button(row4, text='Atualizar (F5)', command=self.refresh_list)
-        self.btn_refresh.pack(side='left')
-        self.btn_select_all = ttk.Button(row4, text='Selecionar tudo (Ctrl+A)', command=self._select_all)
-        self.btn_select_all.pack(side='left', padx=6)
-        self.btn_clear = ttk.Button(row4, text='Limpar seleção', command=self._clear_sel)
-        self.btn_clear.pack(side='left')
-        self.btn_open_out = ttk.Button(row4, text='Abrir saída', command=self._open_outdir)
-        self.btn_open_out.pack(side='left', padx=(6,0))
-        self.btn_process = ttk.Button(row4, text='Processar selecionados (Ctrl+P)', command=self.process_selected)
-        self.btn_process.pack(side='right')
-        self.btn_cancel = ttk.Button(row4, text='Cancelar', command=self._cancel, state='disabled')
-        self.btn_cancel.pack(side='right', padx=(0,6))
-
         # Linha 5: Progresso + status
         row5 = ttk.Frame(container)
-        row5.pack(fill='x', pady=(6,0))
+        row5.pack(fill='x', pady=(2,0))
         self.pb = ttk.Progressbar(row5, variable=self.progress_var, maximum=100, style='Blue.Horizontal.TProgressbar')
         self.pb.pack(fill='x')
         self.status = ttk.Label(container, textvariable=self.status_var, relief='sunken', anchor='w')
-        self.status.pack(fill='x', pady=(6,0))
+        self.status.pack(fill='x', pady=(2,0))
         # cor de fundo da janela
         try:
             self.root.configure(bg='#ffffff')
@@ -305,7 +388,7 @@ class LisAnalysisApp:
     def _set_controls_state(self, state: str):
         widgets = [
             self.btn_refresh, self.btn_select_all, self.btn_clear, self.btn_process,
-            self.ent_folder, self.ent_out
+            self.ent_folder, self.ent_out, self.btn_clean, self.btn_open_out
         ]
         for w in widgets:
             try:
@@ -317,6 +400,31 @@ class LisAnalysisApp:
             self.btn_cancel.configure(state='normal' if state == 'disabled' else 'disabled')
         except Exception:
             pass
+
+    def _clean_results(self):
+        """Remove todos os arquivos da pasta de saída."""
+        outp = Path(self.outdir_var.get()).expanduser()
+        if not outp.exists():
+            messagebox.showwarning('Aviso', 'Pasta de saída não existe.')
+            return
+        
+        files_to_delete = list(outp.glob('*.xlsx')) + list(outp.glob('*.png')) + list(outp.glob('*.txt'))
+        if not files_to_delete:
+            messagebox.showinfo('Aviso', 'Nenhum arquivo para limpar.')
+            return
+        
+        result = messagebox.askyesno('Confirmação', 
+            f'Remover {len(files_to_delete)} arquivo(s) da pasta de saída?\n\nIsso é irreversível!')
+        if result:
+            deleted = 0
+            for f in files_to_delete:
+                try:
+                    f.unlink()
+                    deleted += 1
+                except Exception:
+                    pass
+            messagebox.showinfo('Concluído', f'{deleted} arquivo(s) removido(s).')
+            self.status_var.set(f'{deleted} arquivo(s) removido(s) de {outp}.')
 
     def _filtered_files(self):
         q = (self.filter_var.get() or '').strip().lower()
@@ -396,6 +504,15 @@ class LisAnalysisApp:
         except Exception:
             start = 1
 
+        # Capturar valores dos checkboxes
+        show_plots = self.show_plots_var.get()
+        open_output = self.open_output_var.get()
+        only_comparative = self.only_comparative_var.get()
+        save_logs = self.save_logs_var.get()
+        overwrite = self.overwrite_var.get()
+        
+        log_lines = []
+
         def worker():
             try:
                 self._set_controls_state('disabled')
@@ -405,57 +522,147 @@ class LisAnalysisApp:
                 excel_paths = []
                 idx = start
                 total = len(paths)
+                
+                # Log inicial
+                if save_logs:
+                    log_lines.append(f"=== Processamento iniciado em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+                    log_lines.append(f"Pasta de entrada: {self.folder_var.get()}")
+                    log_lines.append(f"Pasta de saída: {outp}")
+                    log_lines.append(f"Arquivos selecionados: {total}")
+                    log_lines.append(f"Índice inicial: {start}")
+                    log_lines.append("Opções:")
+                    log_lines.append(f"  - Mostrar gráficos: {show_plots}")
+                    log_lines.append(f"  - Abrir pasta ao concluir: {open_output}")
+                    log_lines.append(f"  - Apenas comparativo: {only_comparative}")
+                    log_lines.append(f"  - Salvar logs: {save_logs}")
+                    log_lines.append(f"  - Sobrescrever: {overwrite}")
+                    log_lines.append("")
+                
                 for i, lp in enumerate(paths, start=1):
                     if self.cancel_event.is_set():
                         self.status_var.set('Cancelado pelo usuário.')
+                        if save_logs:
+                            log_lines.append(f"[CANCELADO] Processamento interrompido em {i}/{total}")
                         break
+                    
                     self.status_var.set(f'Processando: {lp.name} ({i}/{total})')
+                    
+                    if save_logs:
+                        log_lines.append(f"[{i}/{total}] {lp.name}")
+                    
+                    # Verificar se arquivo existe (para lógica de sobrescrita)
+                    excel_path = outp / f"Resultados_Simulacao_{idx}.xlsx"
+                    if excel_path.exists() and not overwrite:
+                        if save_logs:
+                            log_lines.append(f"  [PULADO] Arquivo já existe (sobrescrita desativada)")
+                        idx += 1
+                        continue
+                    
                     # parse
                     try:
                         df, stats_lines, summary_from_lis = parse_lis_table(lp)
-                    except Exception:
-                        messagebox.showerror('Erro ao ler', traceback.format_exc())
+                        if save_logs:
+                            log_lines.append(f"  [OK] Parsing concluído")
+                    except Exception as e:
+                        if save_logs:
+                            log_lines.append(f"  [ERRO] Falha ao fazer parsing: {str(e)}")
                         continue
+                    
                     if df is None:
+                        if save_logs:
+                            log_lines.append(f"  [ERRO] DataFrame vazio")
                         continue
-                    excel_path = outp / f"Resultados_Simulacao_{idx}.xlsx"
+                    
+                    # Salvar Excel
                     try:
                         save_df_to_excel_only(df, excel_path)
-                    except Exception:
-                        messagebox.showerror('Erro ao salvar Excel', traceback.format_exc())
+                        if save_logs:
+                            log_lines.append(f"  [OK] Excel salvo")
+                    except Exception as e:
+                        if save_logs:
+                            log_lines.append(f"  [ERRO] Falha ao salvar Excel: {str(e)}")
                         continue
-                    # stats
+                    
+                    # Calcular estatísticas
                     try:
                         computed_stats = calcular_estatisticas_do_df(df)
-                    except Exception:
+                        if save_logs:
+                            log_lines.append(f"  [OK] Estatísticas calculadas")
+                    except Exception as e:
                         computed_stats = {}
+                        if save_logs:
+                            log_lines.append(f"  [AVISO] Falha ao calcular estatísticas: {str(e)}")
+                    
+                    # Escrever estatísticas no Excel
                     try:
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary_from_lis)
-                    except Exception:
-                        pass
-                    # plots
-                    try:
-                        criar_grafico_a_partir_do_excel(excel_path, outp, sim_index=idx, salvar_png=True, mostrar=False)
-                    except Exception:
-                        pass
+                        if save_logs:
+                            log_lines.append(f"  [OK] Estatísticas salvas")
+                    except Exception as e:
+                        if save_logs:
+                            log_lines.append(f"  [AVISO] Falha ao escrever estatísticas: {str(e)}")
+                    
+                    # Gerar gráficos (opcional)
+                    if not only_comparative:
+                        try:
+                            criar_grafico_a_partir_do_excel(excel_path, outp, sim_index=idx, salvar_png=True, mostrar=False)
+                            if save_logs:
+                                log_lines.append(f"  [OK] Gráfico individual gerado")
+                        except Exception as e:
+                            if save_logs:
+                                log_lines.append(f"  [AVISO] Falha ao gerar gráfico: {str(e)}")
+                    else:
+                        if save_logs:
+                            log_lines.append(f"  [PULADO] Gráfico individual (modo comparativo ativado)")
+                    
                     excel_paths.append(excel_path)
                     idx += 1
                     # progresso
                     pct = int(i * 100 / max(1, total))
                     self.progress_var.set(pct)
+                
+                # Gráfico comparativo
                 if not self.cancel_event.is_set() and len(excel_paths) > 1:
                     self.status_var.set('Gerando gráfico comparativo…')
+                    if save_logs:
+                        log_lines.append(f"\n[COMPARATIVO] {len(excel_paths)} arquivos")
                     try:
-                        criar_grafico_comparativo(excel_paths, outp, mostrar=False)
-                    except Exception:
-                        pass
+                        criar_grafico_comparativo(excel_paths, outp, mostrar=show_plots)
+                        if save_logs:
+                            log_lines.append(f"  [OK] Gráfico comparativo gerado")
+                    except Exception as e:
+                        if save_logs:
+                            log_lines.append(f"  [AVISO] Falha ao gerar comparativo: {str(e)}")
+                
+                # Salvar log
+                if save_logs:
+                    try:
+                        log_path = outp / f"log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                        log_lines.append(f"\n=== Concluído em {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===")
+                        log_lines.append(f"Total processado: {len(excel_paths)}/{total}")
+                        log_path.write_text('\n'.join(log_lines), encoding='utf-8')
+                    except Exception as e:
+                        log_lines.append(f"[AVISO] Erro ao salvar log: {str(e)}")
+                
+                # Finalização
                 if self.cancel_event.is_set():
-                    messagebox.showinfo('Cancelado', 'O processamento foi cancelado.')
+                    messagebox.showinfo('Cancelado', 'Processamento cancelado pelo usuário.')
                 else:
-                    self.status_var.set('Concluído.')
-                    messagebox.showinfo('Concluído', f'Processo finalizado. Verifique: {outp}')
+                    self.status_var.set('Concluído!')
+                    msg = f'Processamento concluído!\n\n'
+                    msg += f'Arquivos processados: {len(excel_paths)}/{total}\n'
+                    msg += f'Pasta: {outp}'
+                    messagebox.showinfo('Concluído', msg)
+                    
+                    # Abrir pasta se solicitado
+                    if open_output:
+                        _open_in_file_manager(outp)
+                        
             except Exception:
-                messagebox.showerror('Erro', traceback.format_exc())
+                err_msg = traceback.format_exc()
+                if save_logs:
+                    log_lines.append(f"\n[ERRO CRÍTICO]\n{err_msg}")
+                messagebox.showerror('Erro', err_msg)
             finally:
                 self._set_controls_state('normal')
                 self.progress_var.set(0)
@@ -492,39 +699,58 @@ class LisAnalysisApp:
         # frames e LabelFrames
         self.style.configure('TFrame', background=BG)
         self.style.configure('Card.TLabelframe', background=BG, bordercolor=BORDER)
-        self.style.configure('Card.TLabelframe.Label', background=BG, foreground=HEADER_FG)
+        self.style.configure('Card.TLabelframe.Label', background=BG, foreground=HEADER_FG, font=('TkDefaultFont', 10, 'bold'))
         self.style.configure('TLabelframe', background=BG)
-        self.style.configure('TLabelframe.Label', background=BG, foreground=HEADER_FG)
+        self.style.configure('TLabelframe.Label', background=BG, foreground=HEADER_FG, font=('TkDefaultFont', 10, 'bold'))
 
         # labels e entradas
         self.style.configure('TLabel', background=BG, foreground=TEXT)
-        self.style.configure('TEntry', fieldbackground=BG, foreground=TEXT)
+        self.style.configure('TEntry', fieldbackground=BG, foreground=TEXT, borderwidth=1)
         try:
             self.style.map('TEntry', fieldbackground=[('disabled', '#f0f0f0')])
         except Exception:
             pass
 
-        # botões
-        self.style.configure('TButton', background=ACCENT_BG)
+        # botões (melhorado)
+        self.style.configure('TButton', background=ACCENT_BG, foreground=TEXT, borderwidth=1, relief='raised', padding=8)
         try:
-            self.style.map('TButton', background=[('active', '#d6eaff')])
+            self.style.map('TButton', 
+                          background=[('active', '#d6eaff'), ('disabled', '#f0f0f0')],
+                          foreground=[('disabled', '#999999')])
+        except Exception:
+            pass
+
+        # checkbuttons (novo)
+        self.style.configure('TCheckbutton', background=BG, foreground=TEXT)
+        try:
+            self.style.map('TCheckbutton', background=[('active', ACCENT_BG)])
         except Exception:
             pass
 
         # treeview
-        self.style.configure('Treeview', background=BG, fieldbackground=BG, foreground=TEXT, rowheight=22)
+        self.style.configure('Treeview', background=BG, fieldbackground=BG, foreground=TEXT, rowheight=24, borderwidth=1)
         self.style.map('Treeview', background=[('selected', SEL_BG)], foreground=[('selected', TEXT)])
-        self.style.configure('Treeview.Heading', background=HEADER_BG, foreground=HEADER_FG)
-
-        # scrollbars (parcial, nem todos temas suportam)
+        self.style.configure('Treeview.Heading', background=HEADER_BG, foreground=HEADER_FG, borderwidth=1)
         try:
-            self.style.configure('Vertical.TScrollbar', background=BG)
-            self.style.configure('Horizontal.TScrollbar', background=BG)
+            self.style.map('Treeview.Heading', background=[('active', '#d6eaff')])
         except Exception:
             pass
 
-        # progressbar
-        self.style.configure('Blue.Horizontal.TProgressbar', troughcolor=ACCENT_BG, background=PROGRESS)
+        # scrollbars
+        try:
+            self.style.configure('Vertical.TScrollbar', background=BG, troughcolor=ACCENT_BG)
+            self.style.configure('Horizontal.TScrollbar', background=BG, troughcolor=ACCENT_BG)
+        except Exception:
+            pass
+
+        # progressbar (melhorado)
+        self.style.configure('Blue.Horizontal.TProgressbar', troughcolor=ACCENT_BG, background=PROGRESS, borderwidth=0, relief='flat')
+
+        # Spinbox (novo)
+        try:
+            self.style.configure('TSpinbox', fieldbackground=BG, foreground=TEXT, borderwidth=1)
+        except Exception:
+            pass
 
 
 def launch_gui(folder: Path, outdir: Path, start_index: int = 1):

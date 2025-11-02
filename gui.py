@@ -28,6 +28,11 @@ try:
         modify_acp_rpi,
         run_acp_simulation
     )
+    from control_detector import (
+        ControlDetector,
+        FileControlInfo,
+        analyze_workspace_files
+    )
 except Exception:
     # fallback: erro será exibido quando tentar abrir GUI via main
     raise
@@ -147,6 +152,11 @@ class LisAnalysisApp:
         self.available_variables = []  # Lista de variáveis detectadas
         self.variable_checkboxes = {}  # Dict: {var_name: BooleanVar}
         self.variables_frame = None  # Frame que contém os checkboxes de variáveis
+        
+        # Variáveis para controle inteligente de parâmetros
+        self.detected_controls = []  # Lista de FileControlInfo
+        self.control_widgets = {}  # Dict: {param_name: widget}
+        self.control_frame = None  # Frame para controles dinâmicos
 
         self._load_prefs()
         self._build_menu()
@@ -364,60 +374,45 @@ class LisAnalysisApp:
         btn_detect.pack(pady=(5,0))
         _Tooltip(btn_detect, 'Analisa o primeiro arquivo selecionado para detectar variáveis')
 
-        # Linha 1.8: Controle ATP/ATPDraw (NOVA SEÇÃO)
-        row1_8 = ttk.LabelFrame(container, text='⚡ Controle de Simulação ATP', padding=(10,8), style='Card.TLabelframe')
+        # Linha 1.8: Controle Inteligente de Parâmetros (NOVA SEÇÃO DINÂMICA)
+        row1_8 = ttk.LabelFrame(container, text='🎯 Controle Inteligente de Parâmetros', padding=(10,8), style='Card.TLabelframe')
         row1_8.pack(fill='x', pady=(8,0))
         
-        # Frame para organizar controles ATP
-        atp_frame = ttk.Frame(row1_8)
-        atp_frame.pack(fill='x')
+        # Frame interno para controles dinâmicos
+        self.control_frame = ttk.Frame(row1_8)
+        self.control_frame.pack(fill='both', expand=True)
         
-        # Linha 1: Arquivo .acp
-        ttk.Label(atp_frame, text='Arquivo .acp:').grid(row=0, column=0, sticky='w', pady=2)
-        self.acp_file_var = tk.StringVar()
-        self.ent_acp = ttk.Entry(atp_frame, textvariable=self.acp_file_var, width=40)
-        self.ent_acp.grid(row=0, column=1, sticky='we', padx=6, pady=2)
-        btn_acp = ttk.Button(atp_frame, text='Escolher…', command=self._choose_acp_file)
-        btn_acp.grid(row=0, column=2, sticky='w', pady=2)
-        _Tooltip(btn_acp, 'Selecionar arquivo .acp do ATPDraw para modificar')
+        # Mensagem inicial
+        self.control_label = ttk.Label(
+            self.control_frame,
+            text='💡 Selecione arquivos .lis/.acp para detectar parâmetros (RPI, RF, etc)',
+            foreground='gray'
+        )
+        self.control_label.pack(pady=10)
         
-        # Linha 2: Valor RPI
-        ttk.Label(atp_frame, text='RPI (Ω):').grid(row=1, column=0, sticky='w', pady=2)
-        self.rpi_value_var = tk.DoubleVar(value=100.0)
-        spn_rpi = ttk.Spinbox(atp_frame, from_=1, to=10000, textvariable=self.rpi_value_var, width=15)
-        spn_rpi.grid(row=1, column=1, sticky='w', padx=6, pady=2)
-        _Tooltip(spn_rpi, 'Valor da Resistência de Pré-Inserção em Ohms')
+        # Botões de ação
+        control_buttons = ttk.Frame(row1_8)
+        control_buttons.pack(fill='x', pady=(5,0))
         
-        # Linha 3: Caminho do ATP
-        ttk.Label(atp_frame, text='Executável ATP:').grid(row=2, column=0, sticky='w', pady=2)
+        self.btn_detect_controls = ttk.Button(control_buttons, text='🔍 Detectar Parâmetros', command=self._detect_control_parameters)
+        self.btn_detect_controls.pack(side='left', padx=2)
+        _Tooltip(self.btn_detect_controls, 'Analisa arquivos selecionados e identifica RPI, RF e outros parâmetros')
+        
+        self.btn_show_summary = ttk.Button(control_buttons, text='📊 Resumo', command=self._show_control_summary)
+        self.btn_show_summary.pack(side='left', padx=2)
+        _Tooltip(self.btn_show_summary, 'Mostra resumo dos parâmetros detectados')
+        
+        # Linha para executável ATP (fixo)
+        atp_exe_frame = ttk.Frame(row1_8)
+        atp_exe_frame.pack(fill='x', pady=(8,0))
+        
+        ttk.Label(atp_exe_frame, text='Executável ATP:').pack(side='left')
         self.atp_exe_var = tk.StringVar()
-        self.ent_atp_exe = ttk.Entry(atp_frame, textvariable=self.atp_exe_var, width=40)
-        self.ent_atp_exe.grid(row=2, column=1, sticky='we', padx=6, pady=2)
-        btn_atp_exe = ttk.Button(atp_frame, text='Escolher…', command=self._choose_atp_executable)
-        btn_atp_exe.grid(row=2, column=2, sticky='w', pady=2)
-        _Tooltip(btn_atp_exe, 'Caminho para tpbig ou atpmingw (deixe vazio para auto-detectar)')
-        
-        # Botões de ação ATP
-        atp_buttons = ttk.Frame(row1_8)
-        atp_buttons.pack(fill='x', pady=(5,0))
-        
-        self.btn_analyze_acp = ttk.Button(atp_buttons, text='🔍 Analisar .acp', command=self._analyze_acp)
-        self.btn_analyze_acp.pack(side='left', padx=2)
-        _Tooltip(self.btn_analyze_acp, 'Mostra resumo do arquivo .acp')
-        
-        self.btn_modify_acp = ttk.Button(atp_buttons, text='🔧 Modificar RPI', command=self._modify_acp_rpi)
-        self.btn_modify_acp.pack(side='left', padx=2)
-        _Tooltip(self.btn_modify_acp, 'Cria novo .acp com RPI modificado')
-        
-        self.btn_run_simulation = ttk.Button(atp_buttons, text='🚀 Executar Simulação', command=self._run_atp_simulation)
-        self.btn_run_simulation.pack(side='left', padx=2)
-        _Tooltip(self.btn_run_simulation, 'Executa ATP e gera arquivo .lis')
-        
-        self.btn_full_cycle = ttk.Button(atp_buttons, text='⚙️ Ciclo Completo', command=self._run_full_cycle)
-        self.btn_full_cycle.pack(side='left', padx=2)
-        _Tooltip(self.btn_full_cycle, 'Modificar RPI → Simular → Analisar')
-        
-        atp_frame.columnconfigure(1, weight=1)
+        self.ent_atp_exe = ttk.Entry(atp_exe_frame, textvariable=self.atp_exe_var, width=35)
+        self.ent_atp_exe.pack(side='left', padx=6, fill='x', expand=True)
+        btn_atp_exe = ttk.Button(atp_exe_frame, text='Escolher…', command=self._choose_atp_executable)
+        btn_atp_exe.pack(side='left')
+        _Tooltip(btn_atp_exe, 'Caminho para tpbig ou atpmingw (opcional)')
 
         # Linha 2: Filtro
         row2 = ttk.Frame(container, padding=(0,4,0,0))
@@ -684,7 +679,287 @@ class LisAnalysisApp:
         action = 'selecionadas' if state else 'desmarcadas'
         self.status_var.set(f'{len(self.variable_checkboxes)} variável(is) {action}.')
 
-    # ==================== MÉTODOS DE CONTROLE ATP ====================
+    # ==================== MÉTODOS DE CONTROLE INTELIGENTE ====================
+    
+    def _detect_control_parameters(self):
+        """Detecta parâmetros de controle (RPI, RF, etc) nos arquivos selecionados"""
+        # Pegar arquivos selecionados
+        sels = self.tv.selection()
+        if not sels:
+            messagebox.showwarning('Aviso', 'Selecione ao menos um arquivo .lis!')
+            return
+        
+        selected_files = [Path(item) for item in sels]
+        
+        try:
+            self.status_var.set('Detectando parâmetros de controle...')
+            self.root.update_idletasks()
+            
+            # Detectar parâmetros
+            self.detected_controls = ControlDetector.detect_from_files(selected_files)
+            
+            # Filtrar apenas arquivos COM controle
+            with_control = [info for info in self.detected_controls if info.has_control]
+            without_control = [info for info in self.detected_controls if not info.has_control]
+            
+            if not with_control:
+                msg = f'❌ Nenhum parâmetro de controle detectado!\n\n'
+                msg += f'Arquivos analisados: {len(selected_files)}\n'
+                if without_control:
+                    msg += f'\n📄 Arquivos "Sem Controle":\n'
+                    for info in without_control:
+                        msg += f'  • {info.original_path.name}\n'
+                messagebox.showinfo('Info', msg)
+                return
+            
+            # Limpar frame anterior
+            for widget in self.control_frame.winfo_children():
+                widget.destroy()
+            
+            self.control_widgets.clear()
+            
+            # Criar título
+            title_text = f'✅ {len(with_control)} arquivo(s) com controle detectado(s)'
+            if without_control:
+                title_text += f' | {len(without_control)} sem controle'
+            
+            title_label = ttk.Label(
+                self.control_frame,
+                text=title_text,
+                font=('TkDefaultFont', 9, 'bold'),
+                foreground='#2F75B5'
+            )
+            title_label.pack(anchor='w', pady=(0, 5))
+            
+            # Coletar todos os parâmetros únicos detectados
+            all_params = {}  # {param_name: [values]}
+            for info in with_control:
+                for param in info.parameters:
+                    if param.name not in all_params:
+                        all_params[param.name] = set()
+                    all_params[param.name].add(param.value)
+            
+            # Criar controles dinâmicos
+            controls_container = ttk.Frame(self.control_frame)
+            controls_container.pack(fill='both', expand=True, pady=(5, 0))
+            
+            row = 0
+            for param_name in sorted(all_params.keys()):
+                values = sorted(all_params[param_name])
+                desc = ControlDetector.get_parameter_description(param_name)
+                unit = ControlDetector.UNITS.get(param_name, '')
+                
+                # Label
+                label_text = f'{param_name} ({desc}):'
+                ttk.Label(controls_container, text=label_text).grid(
+                    row=row, column=0, sticky='w', pady=4
+                )
+                
+                # Valores detectados
+                values_text = ', '.join([f'{v:.0f}{unit}' for v in values])
+                ttk.Label(
+                    controls_container,
+                    text=f'📌 Detectado: {values_text}',
+                    foreground='#666'
+                ).grid(row=row, column=1, sticky='w', padx=(10, 0), pady=4)
+                
+                row += 1
+                
+                # Campo de entrada para novo valor
+                ttk.Label(controls_container, text=f'   Novo valor:').grid(
+                    row=row, column=0, sticky='w', pady=2
+                )
+                
+                new_value_var = tk.DoubleVar(value=values[0] if values else 0)
+                self.control_widgets[param_name] = new_value_var
+                
+                # Spinbox ou Combobox com sugestões
+                suggestions = ControlDetector.suggest_values(param_name, values[0] if values else 0)
+                
+                entry_frame = ttk.Frame(controls_container)
+                entry_frame.grid(row=row, column=1, sticky='w', padx=(10, 0), pady=2)
+                
+                spinbox = ttk.Spinbox(
+                    entry_frame,
+                    from_=1, to=10000,
+                    textvariable=new_value_var,
+                    width=12
+                )
+                spinbox.pack(side='left')
+                
+                # Botões de sugestões rápidas
+                for sug_val in suggestions[:5]:
+                    btn = ttk.Button(
+                        entry_frame,
+                        text=f'{int(sug_val)}',
+                        width=4,
+                        command=lambda v=sug_val, var=new_value_var: var.set(v)
+                    )
+                    btn.pack(side='left', padx=1)
+                    _Tooltip(btn, f'Definir para {sug_val}{unit}')
+                
+                row += 1
+            
+            controls_container.columnconfigure(1, weight=1)
+            
+            # Botões de ação
+            action_frame = ttk.Frame(self.control_frame)
+            action_frame.pack(fill='x', pady=(10, 0))
+            
+            ttk.Button(
+                action_frame,
+                text='🔧 Aplicar Modificações',
+                command=self._apply_control_modifications
+            ).pack(side='left', padx=2)
+            
+            ttk.Button(
+                action_frame,
+                text='📊 Ver Resumo',
+                command=self._show_control_summary
+            ).pack(side='left', padx=2)
+            
+            self.status_var.set(f'✅ {len(with_control)} arquivo(s) com controle detectado(s)')
+            
+        except Exception as e:
+            messagebox.showerror('Erro', f'Falha ao detectar parâmetros:\n\n{str(e)}')
+            self.status_var.set('Erro ao detectar parâmetros')
+            traceback.print_exc()
+    
+    def _show_control_summary(self):
+        """Mostra resumo detalhado dos parâmetros detectados"""
+        if not self.detected_controls:
+            messagebox.showinfo('Info', 'Nenhum parâmetro detectado ainda.\n\nClique em "Detectar Parâmetros" primeiro.')
+            return
+        
+        with_control = [info for info in self.detected_controls if info.has_control]
+        without_control = [info for info in self.detected_controls if not info.has_control]
+        
+        msg = "📊 RESUMO DOS PARÂMETROS DETECTADOS\n"
+        msg += "=" * 60 + "\n\n"
+        
+        if with_control:
+            msg += f"✅ Arquivos COM controle: {len(with_control)}\n\n"
+            
+            for info in with_control:
+                msg += f"📄 {info.original_path.name}\n"
+                msg += f"   Tipo: {info.file_type}\n"
+                
+                if info.parameters:
+                    msg += f"   Parâmetros:\n"
+                    for param in info.parameters:
+                        desc = ControlDetector.get_parameter_description(param.name)
+                        msg += f"      • {param.name} ({desc}): {param.value} {param.unit}\n"
+                msg += "\n"
+        
+        if without_control:
+            msg += f"❌ Arquivos SEM controle: {len(without_control)}\n"
+            for info in without_control:
+                msg += f"   • {info.original_path.name}\n"
+        
+        messagebox.showinfo('Resumo dos Parâmetros', msg)
+    
+    def _apply_control_modifications(self):
+        """Aplica modificações nos arquivos .acp baseado nos parâmetros editados"""
+        if not self.detected_controls:
+            messagebox.showwarning('Aviso', 'Nenhum parâmetro detectado!')
+            return
+        
+        if not self.control_widgets:
+            messagebox.showwarning('Aviso', 'Nenhuma modificação definida!')
+            return
+        
+        # Coletar novos valores
+        new_params = {}
+        for param_name, var in self.control_widgets.items():
+            new_params[param_name] = var.get()
+        
+        # Confirmar ação
+        params_str = ', '.join([f'{k}={v:.0f}' for k, v in new_params.items()])
+        
+        confirm = messagebox.askyesno(
+            'Confirmar Modificações',
+            f'Aplicar as seguintes modificações?\n\n'
+            f'{params_str}\n\n'
+            f'Serão criados novos arquivos .acp modificados.'
+        )
+        
+        if not confirm:
+            return
+        
+        self.status_var.set('Aplicando modificações...')
+        
+        try:
+            modified_count = 0
+            
+            with_control = [info for info in self.detected_controls if info.has_control]
+            
+            for info in with_control:
+                # Tentar encontrar arquivo .acp correspondente
+                acp_path = info.original_path.with_suffix('.acp')
+                
+                if not acp_path.exists():
+                    # Tentar variações de maiúsculas
+                    acp_path = info.original_path.with_suffix('.ACP')
+                
+                if not acp_path.exists():
+                    print(f"⚠️ Arquivo .acp não encontrado para {info.original_path.name}")
+                    continue
+                
+                # Gerar novo nome de arquivo
+                new_filename = ControlDetector.generate_new_filename(info, new_params)
+                output_path = acp_path.parent / new_filename
+                
+                # Modificar arquivo .acp
+                parser = AcpParser(acp_path)
+                parser.extract_atp_from_acp()
+                
+                modified = False
+                for param_name, new_value in new_params.items():
+                    if param_name == 'RPI':
+                        if parser.modify_rpi_value(new_value):
+                            modified = True
+                
+                if modified:
+                    if parser.save_modified_acp(output_path):
+                        modified_count += 1
+                        print(f"✅ Modificado: {output_path.name}")
+            
+            if modified_count > 0:
+                messagebox.showinfo(
+                    'Sucesso',
+                    f'✅ {modified_count} arquivo(s) .acp modificado(s)!\n\n'
+                    f'Novos arquivos criados com parâmetros atualizados.'
+                )
+                self.status_var.set(f'✅ {modified_count} arquivo(s) modificado(s)')
+            else:
+                messagebox.showwarning(
+                    'Aviso',
+                    'Nenhum arquivo foi modificado.\n\n'
+                    'Verifique se os arquivos .acp estão na mesma pasta dos .lis'
+                )
+                self.status_var.set('Nenhum arquivo modificado')
+        
+        except Exception as e:
+            messagebox.showerror('Erro', f'Falha ao aplicar modificações:\n\n{str(e)}')
+            self.status_var.set('Erro ao aplicar modificações')
+            traceback.print_exc()
+
+    # ==================== MÉTODOS DE CONTROLE ATP (MANTIDOS PARA COMPATIBILIDADE) ====================
+    
+    def _choose_atp_executable(self):
+        """Escolhe executável do ATP (tpbig, atpmingw)"""
+        filepath = filedialog.askopenfilename(
+            title='Selecionar executável ATP',
+            initialdir='/usr/local/bin',
+            filetypes=[
+                ('Executáveis', 'tpbig;atpmingw;*.exe'),
+                ('Todos os arquivos', '*.*')
+            ]
+        )
+        
+        if filepath:
+            self.atp_exe_var.set(filepath)
+            self.status_var.set(f'Executável ATP: {Path(filepath).name}')
     
     def _choose_acp_file(self):
         """Escolhe arquivo .acp para modificar/simular"""

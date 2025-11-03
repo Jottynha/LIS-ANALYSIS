@@ -271,19 +271,47 @@ class AtpRunner:
     
     def _find_atp_executable(self) -> Optional[str]:
         """Tenta encontrar executável do ATP no sistema"""
+        import sys
+        import os
+        
+        # Caminhos possíveis para executáveis ATP nativos (Linux/Unix)
         possible_paths = [
             '/usr/local/bin/tpbig',
             '/usr/bin/tpbig',
             '/opt/atp/tpbig',
             'tpbig',
             'atpmingw',
-            '/usr/local/bin/atpmingw'
+            '/usr/local/bin/atpmingw',
+            '/usr/local/bin/atp',
+            '/usr/bin/atp'
         ]
         
+        # Procurar executáveis nativos primeiro
         for path in possible_paths:
-            if shutil.which(path):
-                return path
+            found = shutil.which(path)
+            if found:
+                print(f"✅ Executável ATP encontrado: {found}")
+                return found
         
+        # Se não encontrou nativo, tentar Wine + Atpdraw.exe (apenas Linux)
+        if sys.platform.startswith('linux'):
+            wine_path = shutil.which('wine')
+            if wine_path:
+                # Procurar Atpdraw.exe em locais comuns
+                atpdraw_locations = [
+                    Path.home() / 'ATPDraw' / 'Atpdraw.exe',
+                    Path.home() / '.wine' / 'drive_c' / 'ATP' / 'Atpdraw.exe',
+                    Path('/opt/atpdraw/Atpdraw.exe'),
+                    Path('C:/ATP/Atpdraw.exe')  # Caminho Wine
+                ]
+                
+                for atpdraw in atpdraw_locations:
+                    if atpdraw.exists() and os.access(atpdraw, os.R_OK):
+                        print(f"✅ ATP via Wine encontrado: wine {atpdraw}")
+                        # Retornar comando completo com wine
+                        return f"wine {atpdraw}"
+        
+        print("❌ Nenhum executável ATP encontrado no sistema")
         return None
     
     def run_simulation(self, acp_path: Path, output_dir: Path = None) -> Optional[Path]:
@@ -299,7 +327,10 @@ class AtpRunner:
         """
         if not self.atpdraw_path:
             print("❌ Executável do ATP não encontrado!")
-            print("💡 Configure o caminho manualmente: AtpRunner('/caminho/para/tpbig')")
+            print("\n💡 Opções para resolver:")
+            print("   1. Instale o ATP nativo para Linux (tpbig)")
+            print("   2. Use Wine + ATPDraw para Windows")
+            print("   3. Configure o caminho manualmente na interface")
             return None
         
         if not acp_path.exists():
@@ -313,27 +344,127 @@ class AtpRunner:
         if not atp_text:
             return None
         
-        # Criar arquivo temporário .atp
+        # Criar arquivo temporário .atp no mesmo diretório do .acp
         temp_atp = acp_path.with_suffix('.atp')
-        with open(temp_atp, 'w', encoding='windows-1252', errors='ignore') as f:
-            f.write(atp_text)
+        
+        # Escrever conteúdo ATP no arquivo temporário
+        try:
+            with open(temp_atp, 'w', encoding='windows-1252', errors='ignore') as f:
+                f.write(atp_text)
+            print(f"📝 Arquivo .atp temporário criado: {temp_atp.name}")
+        except Exception as e:
+            print(f"❌ Erro ao criar arquivo .atp temporário: {e}")
+            return None
         
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
         
         try:
+            # Preparar comando baseado no executável
+            timeout = 120  # Timeout padrão de 2 minutos
+            
+            if 'wine' in self.atpdraw_path.lower():
+                # Comando com Wine - extrair caminho do executável
+                exe_path = self.atpdraw_path.replace('wine', '').strip()
+                exe_dir = Path(exe_path).parent
+                
+                # PRIMEIRO: Procurar por executável de linha de comando (tpbig.exe, ATP.exe, etc)
+                print(f"   🔍 Procurando executável CLI em: {exe_dir}")
+                cli_executables = [
+                    exe_dir / 'tpbig.exe',
+                    exe_dir / 'ATP.exe', 
+                    exe_dir / 'atpmingw.exe',
+                    exe_dir / 'runATP.exe',
+                    exe_dir / 'atpdraw' / 'tpbig.exe',
+                    exe_dir / 'bin' / 'tpbig.exe',
+                ]
+                
+                cli_found = None
+                for cli_exe in cli_executables:
+                    if cli_exe.exists():
+                        print(f"   ✅ Encontrado executável CLI: {cli_exe}")
+                        cli_found = cli_exe
+                        break
+                
+                if cli_found:
+                    # Usar executável de linha de comando (melhor opção)
+                    cmd = ['wine', str(cli_found), str(temp_atp.absolute())]
+                    timeout = 120  # 2 minutos para CLI
+                else:
+                    # FALLBACK: Usar Atpdraw.exe com opções não-interativas
+                    print(f"   ⚠️  Executável CLI não encontrado, usando Atpdraw.exe")
+                    print(f"   ℹ️  ATENÇÃO: Atpdraw.exe pode não funcionar via linha de comando")
+                    print(f"\n   💡 RECOMENDAÇÃO:")
+                    print(f"      Procure por 'tpbig.exe' ou 'ATP.exe' em {exe_dir}")
+                    print(f"      e configure manualmente na interface\n")
+                    
+                    # Tentar com Xvfb + Wine
+                    if shutil.which('xvfb-run'):
+                        print(f"   ℹ️  Usando Xvfb para executar interface gráfica")
+                        cmd = [
+                            'xvfb-run', '-a',
+                            'wine', exe_path, 
+                            str(temp_atp.absolute())
+                        ]
+                        timeout = 60  # 1 minuto (mais curto porque provavelmente vai travar)
+                    else:
+                        print(f"   ❌ Xvfb não instalado e executável CLI não encontrado")
+                        print(f"   📦 Instale Xvfb: sudo apt install xvfb")
+                        temp_atp.unlink(missing_ok=True)
+                        return None
+                        
+            else:
+                # Comando nativo
+                cmd = [self.atpdraw_path, str(temp_atp.absolute())]
+                timeout = 120
+            
+            print(f"   Comando: {' '.join(cmd)}")
+            print(f"   Diretório de trabalho: {acp_path.parent}")
+            print(f"   Timeout: {timeout}s")
+            print(f"   ⏳ Executando... (aguarde)")
+            
             # Executar ATP
             result = subprocess.run(
-                [self.atpdraw_path, str(temp_atp)],
-                cwd=acp_path.parent,
+                cmd,
+                cwd=str(acp_path.parent),
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minutos timeout
+                timeout=timeout
             )
             
-            # Procurar arquivo .lis gerado
-            lis_path = acp_path.with_suffix('.lis')
+            print(f"   ✅ Processo finalizado!")
+            print(f"   Código de retorno: {result.returncode}")
             
-            if lis_path.exists():
+            # Procurar arquivo .lis gerado (pode ter diferentes nomes)
+            possible_lis_files = [
+                temp_atp.with_suffix('.lis'),  # temp_arquivo.lis
+                acp_path.with_suffix('.lis'),   # arquivo_original.lis
+                temp_atp.with_suffix('.LIS'),   # Maiúscula
+                acp_path.with_suffix('.LIS'),
+            ]
+            
+            # Procurar também por qualquer .lis novo no diretório
+            import time
+            current_time = time.time()
+            
+            lis_path = None
+            for possible_lis in possible_lis_files:
+                if possible_lis.exists():
+                    # Verificar se foi modificado recentemente (últimos 30 segundos)
+                    if current_time - possible_lis.stat().st_mtime < 30:
+                        lis_path = possible_lis
+                        print(f"   📄 Arquivo .lis encontrado: {lis_path.name}")
+                        break
+            
+            if not lis_path:
+                # Procurar qualquer .lis criado/modificado recentemente
+                print(f"   🔍 Procurando arquivos .lis recentes...")
+                for lis_file in list(acp_path.parent.glob('*.lis')) + list(acp_path.parent.glob('*.LIS')):
+                    if current_time - lis_file.stat().st_mtime < 30:
+                        lis_path = lis_file
+                        print(f"   📄 Arquivo .lis recente encontrado: {lis_path.name}")
+                        break
+            
+            if lis_path and lis_path.exists():
                 # Mover para output_dir se especificado
                 if output_dir:
                     output_dir = Path(output_dir)
@@ -342,7 +473,12 @@ class AtpRunner:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     new_lis = output_dir / f"{acp_path.stem}_{timestamp}.lis"
                     
-                    shutil.move(lis_path, new_lis)
+                    shutil.copy2(lis_path, new_lis)  # Copiar ao invés de mover
+                    
+                    # Limpar .lis original se for diferente do .acp original
+                    if lis_path != acp_path.with_suffix('.lis'):
+                        lis_path.unlink(missing_ok=True)
+                    
                     lis_path = new_lis
                 
                 print(f"✅ Simulação concluída: {lis_path}")
@@ -352,16 +488,57 @@ class AtpRunner:
                 
                 return lis_path
             else:
-                print(f"⚠️ Simulação executada mas .lis não foi gerado")
-                print(f"   Stdout: {result.stdout[:200]}")
-                print(f"   Stderr: {result.stderr[:200]}")
+                print(f"⚠️  Simulação executada mas .lis não foi gerado")
+                print(f"   Código de retorno: {result.returncode}")
+                if result.stdout:
+                    print(f"   Stdout: {result.stdout[:1000]}")
+                if result.stderr:
+                    print(f"   Stderr: {result.stderr[:1000]}")
+                
+                # Listar arquivos no diretório para debug
+                print(f"\n   📁 Arquivos no diretório (com timestamps):")
+                import time
+                current_time = time.time()
+                for f in sorted(acp_path.parent.glob('*'), key=lambda x: x.stat().st_mtime, reverse=True)[:15]:
+                    age = current_time - f.stat().st_mtime
+                    print(f"      - {f.name} (modificado há {age:.1f}s)")
+                
                 return None
         
         except subprocess.TimeoutExpired:
-            print("❌ Timeout: simulação demorou mais de 5 minutos")
+            print(f"❌ Timeout: simulação demorou mais de {timeout} segundos")
+            print(f"\n   💡 Possíveis causas:")
+            print(f"      1. Atpdraw.exe está esperando interação do usuário")
+            print(f"      2. Não existe executável CLI (tpbig.exe)")
+            print(f"\n   📦 Procure por 'tpbig.exe' em /home/pedro/ATPDraw/")
+            print(f"      e configure-o no campo 'Executável ATP'")
+            
+            # Tentar limpar processo travado
+            try:
+                temp_atp.unlink(missing_ok=True)
+            except:
+                pass
+            
+            return None
+        except PermissionError as e:
+            print(f"❌ Erro de permissão ao executar ATP: {e}")
+            print(f"\n💡 Possíveis soluções:")
+            print(f"   1. Verifique se o arquivo tem permissão de execução:")
+            print(f"      chmod +x {self.atpdraw_path}")
+            print(f"   2. Se estiver usando Wine, certifique-se que o Wine está instalado:")
+            print(f"      sudo apt install wine wine64")
+            print(f"   3. Configure um executável válido no campo 'Executável ATP'")
+            return None
+        except FileNotFoundError as e:
+            print(f"❌ Executável não encontrado: {e}")
+            print(f"\n💡 O caminho '{self.atpdraw_path}' não existe ou não é válido")
+            print(f"   Configure o caminho correto no campo 'Executável ATP' da interface")
             return None
         except Exception as e:
             print(f"❌ Erro ao executar ATP: {e}")
+            print(f"\n💡 Detalhes do erro:")
+            import traceback
+            traceback.print_exc()
             return None
         finally:
             # Limpar arquivos temporários

@@ -414,6 +414,10 @@ class LisAnalysisApp:
         self.btn_show_summary.pack(side='left', padx=2)
         _Tooltip(self.btn_show_summary, 'Mostra resumo dos parâmetros detectados')
         
+        self.btn_run_atp = ttk.Button(control_buttons, text='🚀 Rodar ATP', command=self._run_atp_simulation)
+        self.btn_run_atp.pack(side='left', padx=2)
+        _Tooltip(self.btn_run_atp, 'Executa simulação ATP do arquivo .acp selecionado e salva o .lis resultante')
+        
         # Linha para executável ATP (fixo)
         atp_exe_frame = ttk.Frame(row1_8)
         atp_exe_frame.pack(fill='x', pady=(8,0))
@@ -1139,58 +1143,108 @@ class LisAnalysisApp:
             traceback.print_exc()
     
     def _run_atp_simulation(self):
-        """Executa simulação ATP e gera arquivo .lis"""
-        acp_path = self.acp_file_var.get()
-        
-        if not acp_path:
-            messagebox.showwarning('Aviso', 'Selecione um arquivo .acp primeiro!')
+        """Executa simulação ATP a partir de arquivos .acp selecionados e gera arquivo .lis"""
+        # Pegar arquivos .acp selecionados
+        sels = self.tv.selection()
+        if not sels:
+            messagebox.showwarning('Aviso', 'Selecione ao menos um arquivo .acp na lista!')
             return
         
-        acp_path = Path(acp_path)
+        # Filtrar apenas arquivos .acp
+        acp_files = [Path(item) for item in sels if Path(item).suffix.lower() == '.acp']
         
-        if not acp_path.exists():
-            messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
+        if not acp_files:
+            messagebox.showwarning('Aviso', 'Nenhum arquivo .acp selecionado!\n\nSelecione arquivos .acp para executar a simulação.')
             return
         
         output_dir = Path(self.outdir_var.get())
         atp_exe = self.atp_exe_var.get() or None
         
-        self.status_var.set('Executando simulação ATP...')
-        self.btn_run_simulation.config(state='disabled')
+        # Confirmar ação
+        confirm = messagebox.askyesno(
+            'Confirmar Simulação ATP',
+            f'Executar simulação ATP para {len(acp_files)} arquivo(s)?\n\n' +
+            '\n'.join([f'  • {f.name}' for f in acp_files[:5]]) +
+            (f'\n  ... e mais {len(acp_files)-5}' if len(acp_files) > 5 else '') +
+            f'\n\nResultados serão salvos em:\n{output_dir}'
+        )
+        
+        if not confirm:
+            return
+        
+        self.status_var.set(f'Executando simulação ATP para {len(acp_files)} arquivo(s)...')
+        self._set_controls_state('disabled')
         
         def run_thread():
             try:
                 runner = AtpRunner(atp_exe)
                 
                 if not runner.atpdraw_path:
-                    self.root.after(0, lambda: messagebox.showerror(
-                        'Erro',
-                        'Executável do ATP não encontrado!\n\n'
-                        'Configure o caminho manualmente ou instale o ATP.'
-                    ))
+                    error_msg = (
+                        '❌ Executável do ATP não encontrado!\n\n'
+                        '💡 Soluções:\n\n'
+                        '1. Instale o ATP nativo para Linux (tpbig)\n'
+                        '   sudo apt install atp\n\n'
+                        '2. Use Wine + ATPDraw:\n'
+                        '   sudo apt install wine wine64\n'
+                        '   chmod +x /home/pedro/ATPDraw/Atpdraw.exe\n\n'
+                        '3. Configure manualmente:\n'
+                        '   - Campo "Executável ATP" → Escolher executável\n'
+                        '   - Para Wine: wine /caminho/para/Atpdraw.exe\n\n'
+                        '📖 Veja INSTRUCOES_ATP.md para mais detalhes'
+                    )
+                    self.root.after(0, lambda: messagebox.showerror('Erro - ATP Não Configurado', error_msg))
                     self.status_var.set('Erro: ATP não encontrado')
-                    self.btn_run_simulation.config(state='normal')
+                    self._set_controls_state('normal')
                     return
                 
-                lis_path = runner.run_simulation(acp_path, output_dir)
+                success_count = 0
+                failed_files = []
                 
-                if lis_path:
+                for idx, acp_path in enumerate(acp_files, 1):
+                    self.status_var.set(f'[{idx}/{len(acp_files)}] Simulando {acp_path.name}...')
+                    self.root.update_idletasks()
+                    
+                    try:
+                        lis_path = runner.run_simulation(acp_path, output_dir)
+                        
+                        if lis_path:
+                            success_count += 1
+                            print(f"✅ [{idx}/{len(acp_files)}] Sucesso: {lis_path.name}")
+                        else:
+                            failed_files.append(acp_path.name)
+                            print(f"❌ [{idx}/{len(acp_files)}] Falha: {acp_path.name}")
+                    
+                    except Exception as e:
+                        failed_files.append(acp_path.name)
+                        print(f"❌ [{idx}/{len(acp_files)}] Erro em {acp_path.name}: {e}")
+                
+                # Atualizar lista de arquivos
+                self.root.after(0, self.refresh_list)
+                
+                # Mostrar resultado
+                if success_count == len(acp_files):
                     self.root.after(0, lambda: messagebox.showinfo(
                         'Simulação Concluída',
-                        f'✅ Arquivo .lis gerado:\n\n{lis_path.name}\n\n'
-                        f'Localização: {lis_path.parent}'
+                        f'✅ Todas as {success_count} simulação(ões) concluída(s) com sucesso!\n\n'
+                        f'Arquivos .lis salvos em:\n{output_dir}'
                     ))
-                    self.status_var.set(f'Simulação concluída: {lis_path.name}')
-                    
-                    # Atualizar lista de arquivos .lis
-                    self.root.after(0, self.refresh_list)
+                    self.status_var.set(f'✅ {success_count} simulação(ões) concluída(s)')
+                elif success_count > 0:
+                    self.root.after(0, lambda: messagebox.showwarning(
+                        'Simulação Parcialmente Concluída',
+                        f'✅ {success_count} de {len(acp_files)} simulação(ões) concluída(s)\n\n'
+                        f'❌ Falhas em:\n' + '\n'.join([f'  • {f}' for f in failed_files[:10]]) +
+                        (f'\n  ... e mais {len(failed_files)-10}' if len(failed_files) > 10 else '')
+                    ))
+                    self.status_var.set(f'⚠️ {success_count}/{len(acp_files)} simulações concluídas')
                 else:
                     self.root.after(0, lambda: messagebox.showerror(
                         'Erro',
-                        'Simulação falhou ou arquivo .lis não foi gerado.\n\n'
+                        'Todas as simulações falharam!\n\n'
                         'Verifique a saída do console para mais detalhes.'
                     ))
-                    self.status_var.set('Erro na simulação ATP')
+                    self.status_var.set('❌ Todas as simulações falharam')
             
             except Exception as e:
                 self.root.after(0, lambda: messagebox.showerror(
@@ -1202,7 +1256,7 @@ class LisAnalysisApp:
                 traceback.print_exc()
             
             finally:
-                self.btn_run_simulation.config(state='normal')
+                self._set_controls_state('normal')
         
         threading.Thread(target=run_thread, daemon=True).start()
     

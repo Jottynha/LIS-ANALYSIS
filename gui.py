@@ -50,6 +50,17 @@ def _scan_lis(folder: Path):
     return files
 
 
+def _scan_acp(folder: Path):
+    """Retorna arquivos .acp/.ACP ordenados por modificação (desc)."""
+    folder = Path(folder)
+    files = list(folder.glob('*.acp')) + list(folder.glob('*.ACP'))
+    try:
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    except Exception:
+        files.sort()
+    return files
+
+
 def _fmt_size(nbytes: int) -> str:
     for unit in ['B','KB','MB','GB','TB']:
         if nbytes < 1024:
@@ -130,6 +141,7 @@ class LisAnalysisApp:
         self.outdir_var = tk.StringVar(value=str(outdir))
         self.start_idx_var = tk.IntVar(value=start_index)
         self.filter_var = tk.StringVar()
+        self.filetype_var = tk.StringVar(value='.lis')  # '.lis' | '.acp' | 'ambos'
         self.status_var = tk.StringVar(value='Pronto.')
         self.progress_var = tk.IntVar(value=0)
         self.total_var = tk.IntVar(value=0)
@@ -420,8 +432,13 @@ class LisAnalysisApp:
         ttk.Label(row2, text='🔍 Filtro:').pack(side='left')
         ent_filter = ttk.Entry(row2, textvariable=self.filter_var, width=30)
         ent_filter.pack(side='left', padx=6, fill='x', expand=True)
-        _Tooltip(ent_filter, 'Filtra por parte do nome do arquivo (.lis)')
-        ttk.Button(row2, text='Aplicar', command=self.refresh_list).pack(side='left')
+        _Tooltip(ent_filter, 'Filtra por parte do nome do arquivo')
+        ttk.Button(row2, text='Aplicar', command=self.refresh_list).pack(side='left', padx=(0,6))
+        ttk.Label(row2, text='Tipo:').pack(side='left')
+        cmb_type = ttk.Combobox(row2, textvariable=self.filetype_var, width=8, state='readonly', values=('.lis', '.acp', 'ambos'))
+        cmb_type.pack(side='left', padx=6)
+        cmb_type.bind('<<ComboboxSelected>>', lambda e: self.refresh_list())
+        _Tooltip(cmb_type, 'Escolha o tipo de arquivo a listar (.lis, .acp ou ambos)')
 
         # Linha 4: Botões de ação (MOVIDO PARA CIMA)
         row4 = ttk.Frame(container, padding=(0,8,0,0))
@@ -443,7 +460,7 @@ class LisAnalysisApp:
         self.btn_cancel.pack(side='right', padx=1)
 
         # Linha 3: Lista (Treeview) - REDUZIDA
-        row3 = ttk.LabelFrame(container, text='📋 Arquivos .lis encontrados', padding=(6,6), style='Card.TLabelframe')
+        row3 = ttk.LabelFrame(container, text='📋 Arquivos encontrados', padding=(6,6), style='Card.TLabelframe')
         row3.pack(fill='both', expand=True, pady=(8,0)) # expand=True para preencher o espaço
 
         columns = ('nome', 'tamanho', 'modificado')
@@ -568,11 +585,21 @@ class LisAnalysisApp:
     def refresh_list(self):
         folder = Path(self.folder_var.get()).expanduser()
         try:
-            self._files_cache = _scan_lis(folder)
+            ftype = (self.filetype_var.get() or '.lis').strip().lower()
+            if ftype == '.acp':
+                self._files_cache = _scan_acp(folder)
+            elif ftype == 'ambos':
+                self._files_cache = _scan_lis(folder) + _scan_acp(folder)
+                try:
+                    self._files_cache.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+                except Exception:
+                    self._files_cache.sort()
+            else:
+                self._files_cache = _scan_lis(folder)
         except Exception:
             self._files_cache = []
         self._populate_tree()
-        self.status_var.set(f"{len(self._files_cache)} arquivo(s) encontrado(s) em {folder}.")
+        self.status_var.set(f"{len(self._files_cache)} arquivo(s) encontrado(s) em {folder} (tipo: {self.filetype_var.get()}).")
 
     def _detect_variables(self):
         """Detecta variáveis do primeiro arquivo .lis selecionado e cria checkboxes."""
@@ -1325,6 +1352,14 @@ class LisAnalysisApp:
             messagebox.showwarning('Aviso', 'Nenhum arquivo selecionado.')
             return
         paths = [Path(iid) for iid in sels]
+        # Apenas .lis são processados pelo pipeline atual
+        lis_paths = [p for p in paths if p.suffix.lower() == '.lis']
+        non_lis = [p for p in paths if p.suffix.lower() != '.lis']
+        if non_lis:
+            messagebox.showinfo('Aviso', f"{len(non_lis)} arquivo(s) não .lis foram ignorados.")
+        if not lis_paths:
+            messagebox.showwarning('Aviso', 'Nenhum arquivo .lis selecionado para processar.')
+            return
         outp = Path(self.outdir_var.get()).expanduser()
         try:
             start = int(self.start_idx_var.get()) if self.start_idx_var.get() else 1
@@ -1360,7 +1395,7 @@ class LisAnalysisApp:
                 outp.mkdir(parents=True, exist_ok=True)
                 excel_paths = []
                 idx = start
-                total = len(paths)
+                total = len(lis_paths)
                 
                 # Log inicial
                 if save_logs:
@@ -1379,7 +1414,7 @@ class LisAnalysisApp:
                         log_lines.append(f"  - Variáveis selecionadas: {', '.join(selected_variables)}")
                     log_lines.append("")
                 
-                for i, lp in enumerate(paths, start=1):
+                for i, lp in enumerate(lis_paths, start=1):
                     if self.cancel_event.is_set():
                         self.status_var.set('Cancelado pelo usuário.')
                         if save_logs:

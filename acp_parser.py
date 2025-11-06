@@ -327,13 +327,50 @@ class AtpRunner:
                 cwd=acp_path.parent,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minutos timeout
+                timeout=120  # 2 minutos timeout
             )
             
             # Procurar arquivo .lis gerado
             lis_path = acp_path.with_suffix('.lis')
+
+            # Verificar código de retorno do processo ATP
+            if result.returncode != 0:
+                print(f"❌ ATP retornou código {result.returncode}. Considerando falha na simulação.")
+                print(f"   Stdout: {result.stdout[:200]}")
+                print(f"   Stderr: {result.stderr[:200]}")
+                # Se um .lis vazio foi gerado, remover
+                if lis_path.exists():
+                    try:
+                        lis_size = lis_path.stat().st_size
+                    except Exception:
+                        lis_size = 0
+                    if lis_size <= 0:
+                        try:
+                            lis_path.unlink(missing_ok=True)
+                            print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
+                        except Exception as e:
+                            print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                return None
             
             if lis_path.exists():
+                # Validar tamanho do .lis (> 0 bytes) antes de mover
+                try:
+                    lis_size = lis_path.stat().st_size
+                except Exception:
+                    lis_size = 0
+                
+                if lis_size <= 0:
+                    print("⚠️ .lis gerado, porém vazio (0 bytes). Considerando falha na simulação.")
+                    print(f"   Stdout: {result.stdout[:200]}")
+                    print(f"   Stderr: {result.stderr[:200]}")
+                    # Remover arquivo vazio para evitar acúmulo
+                    try:
+                        lis_path.unlink(missing_ok=True)
+                        print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
+                    except Exception as e:
+                        print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                    return None
+                
                 # Mover para output_dir se especificado
                 if output_dir:
                     output_dir = Path(output_dir)

@@ -4,6 +4,7 @@ Permite extrair, modificar e executar simulações ATP.
 """
 
 import zipfile
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -279,6 +280,15 @@ class AtpRunner:
             'atpmingw',
             '/usr/local/bin/atpmingw'
         ]
+
+        # Suporte Windows: procurar .exe e runATP.bat
+        if os.name == 'nt':
+            possible_paths = [
+                'runATP.bat',
+                'tpbig.exe',
+                'atpmingw.exe',
+                *possible_paths
+            ]
         
         for path in possible_paths:
             if shutil.which(path):
@@ -321,9 +331,26 @@ class AtpRunner:
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
         
         try:
+            # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
+            cmd: List[str]
+            ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
+            if ext in ['.bat', '.cmd']:
+                if os.name == 'nt':
+                    cmd = ['cmd', '/c', self.atpdraw_path, str(temp_atp)]
+                else:
+                    # Tentar via Wine
+                    if shutil.which('wine'):
+                        cmd = ['wine', 'cmd', '/c', self.atpdraw_path, str(temp_atp)]
+                    else:
+                        print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
+                        print("💡 Use tpbig/atpmingw nativo ou instale o Wine para usar scripts .bat.")
+                        return None
+            else:
+                cmd = [self.atpdraw_path, str(temp_atp)]
+
             # Executar ATP
             result = subprocess.run(
-                [self.atpdraw_path, str(temp_atp)],
+                cmd,
                 cwd=acp_path.parent,
                 capture_output=True,
                 text=True,

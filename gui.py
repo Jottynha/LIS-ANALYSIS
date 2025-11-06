@@ -426,6 +426,16 @@ class LisAnalysisApp:
         btn_atp_exe.pack(side='left')
         _Tooltip(btn_atp_exe, 'Caminho para tpbig ou atpmingw (opcional)')
 
+        # Linha de ações ATP: executar e ciclo completo
+        atp_action_frame = ttk.Frame(row1_8)
+        atp_action_frame.pack(fill='x', pady=(6,0))
+        self.btn_run_simulation = ttk.Button(atp_action_frame, text='▶ Executar ATP', command=self._run_atp_simulation)
+        self.btn_run_simulation.pack(side='left', padx=2)
+        _Tooltip(self.btn_run_simulation, 'Executa o ATP para o arquivo .acp selecionado e salva o .lis na pasta de saída')
+        self.btn_full_cycle = ttk.Button(atp_action_frame, text='⚙️ Ciclo Completo', command=self._run_full_cycle)
+        self.btn_full_cycle.pack(side='left', padx=2)
+        _Tooltip(self.btn_full_cycle, 'Modifica RPI → Executa ATP → Atualiza lista de resultados')
+
         # Linha 2: Filtro
         row2 = ttk.Frame(container, padding=(0,4,0,0))
         row2.pack(fill='x')
@@ -1156,7 +1166,8 @@ class LisAnalysisApp:
         atp_exe = self.atp_exe_var.get() or None
         
         self.status_var.set('Executando simulação ATP...')
-        self.btn_run_simulation.config(state='disabled')
+        # Iniciar UI de progresso
+        self._start_simulation_ui()
         
         def run_thread():
             try:
@@ -1169,7 +1180,7 @@ class LisAnalysisApp:
                         'Configure o caminho manualmente ou instale o ATP.'
                     ))
                     self.status_var.set('Erro: ATP não encontrado')
-                    self.btn_run_simulation.config(state='normal')
+                    self._end_simulation_ui()
                     return
                 
                 lis_path = runner.run_simulation(acp_path, output_dir)
@@ -1202,9 +1213,99 @@ class LisAnalysisApp:
                 traceback.print_exc()
             
             finally:
-                self.btn_run_simulation.config(state='normal')
+                self._end_simulation_ui()
         
         threading.Thread(target=run_thread, daemon=True).start()
+
+    # ==================== SUPORTE UI SIMULAÇÃO ====================
+    def _start_simulation_ui(self, full_cycle: bool = False):
+        """Desabilita botões e inicia barra de progresso indeterminada."""
+        # Criar progressbar indeterminada sobre a existente se não ativa
+        try:
+            self.pb.config(mode='indeterminate')
+            self.pb.start(10)  # 10ms step
+        except Exception:
+            pass
+        # Registrar início e ativar flag
+        self._sim_start_time = datetime.now()
+        self._sim_running = True
+        # Iniciar atualização de tempo decorrido
+        try:
+            self._update_elapsed()
+        except Exception:
+            pass
+        # Desabilitar botões principais para evitar ações concorrentes
+        for btn in [
+            getattr(self, 'btn_run_simulation', None),
+            getattr(self, 'btn_full_cycle', None),
+            getattr(self, 'btn_process', None),
+            getattr(self, 'btn_detect_controls', None),
+            getattr(self, 'btn_show_summary', None),
+            getattr(self, 'btn_refresh', None),
+            getattr(self, 'btn_select_all', None),
+            getattr(self, 'btn_clear', None),
+            getattr(self, 'btn_clean', None)
+        ]:
+            if btn:
+                try:
+                    btn.config(state='disabled')
+                except Exception:
+                    pass
+        # Mostrar status inicial se não houver
+        if full_cycle:
+            self.status_var.set('Ciclo completo em execução...')
+        else:
+            if not self.status_var.get():
+                self.status_var.set('Executando simulação...')
+
+    def _end_simulation_ui(self):
+        """Restaura estado dos botões e para barra de progresso."""
+        try:
+            self.pb.stop()
+            self.pb.config(mode='determinate')
+            self.progress_var.set(0)
+        except Exception:
+            pass
+        self._sim_running = False
+        # Reabilitar botões
+        for btn in [
+            getattr(self, 'btn_run_simulation', None),
+            getattr(self, 'btn_full_cycle', None),
+            getattr(self, 'btn_process', None),
+            getattr(self, 'btn_detect_controls', None),
+            getattr(self, 'btn_show_summary', None),
+            getattr(self, 'btn_refresh', None),
+            getattr(self, 'btn_select_all', None),
+            getattr(self, 'btn_clear', None),
+            getattr(self, 'btn_clean', None)
+        ]:
+            if btn:
+                try:
+                    btn.config(state='normal')
+                except Exception:
+                    pass
+
+    def _update_elapsed(self):
+        """Atualiza o tempo decorrido no status enquanto simulação ativa."""
+        if not getattr(self, '_sim_running', False):
+            return
+        start = getattr(self, '_sim_start_time', None)
+        if start:
+            delta = datetime.now() - start
+            # Formatar HH:MM:SS
+            total_seconds = int(delta.total_seconds())
+            h = total_seconds // 3600
+            m = (total_seconds % 3600) // 60
+            s = total_seconds % 60
+            stamp = f"{h:02d}:{m:02d}:{s:02d}"
+            # Preserva mensagem principal e adiciona tempo no final
+            base_msg = self.status_var.get().split(' | ')[0]
+            self.status_var.set(f"{base_msg} | ⏱ {stamp}")
+        # agendar próxima atualização
+        try:
+            self.root.after(1000, self._update_elapsed)
+        except Exception:
+            pass
     
     def _run_full_cycle(self):
         """Executa ciclo completo: Modificar RPI → Simular → Analisar"""
@@ -1240,7 +1341,7 @@ class LisAnalysisApp:
             return
         
         self.status_var.set('Iniciando ciclo completo...')
-        self.btn_full_cycle.config(state='disabled')
+        self._start_simulation_ui(full_cycle=True)
         
         def full_cycle_thread():
             try:
@@ -1297,7 +1398,7 @@ class LisAnalysisApp:
                 traceback.print_exc()
             
             finally:
-                self.btn_full_cycle.config(state='normal')
+                self._end_simulation_ui()
         
         threading.Thread(target=full_cycle_thread, daemon=True).start()
 

@@ -331,16 +331,22 @@ class AtpRunner:
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
         
         try:
+            # Listar arquivos antes para detectar novos gerados
+            before_files = set(p.name for p in acp_path.parent.glob('*'))
+
             # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
             cmd: List[str]
             ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
+            run_cwd = acp_path.parent
             if ext in ['.bat', '.cmd']:
+                script_path = Path(self.atpdraw_path)
                 if os.name == 'nt':
-                    cmd = ['cmd', '/c', self.atpdraw_path, str(temp_atp)]
+                    run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
+                    cmd = ['cmd', '/c', str(script_path), str(temp_atp)]
                 else:
-                    # Tentar via Wine
                     if shutil.which('wine'):
-                        cmd = ['wine', 'cmd', '/c', self.atpdraw_path, str(temp_atp)]
+                        run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
+                        cmd = ['wine', 'cmd', '/c', str(script_path), str(temp_atp)]
                     else:
                         print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
                         print("💡 Use tpbig/atpmingw nativo ou instale o Wine para usar scripts .bat.")
@@ -351,22 +357,57 @@ class AtpRunner:
             # Executar ATP
             result = subprocess.run(
                 cmd,
-                cwd=acp_path.parent,
+                cwd=run_cwd,
                 capture_output=True,
                 text=True,
                 timeout=120  # 2 minutos timeout
             )
+
+            # Listar arquivos depois
+            after_files = set(p.name for p in run_cwd.glob('*'))
+            new_files = sorted(after_files - before_files)
             
-            # Procurar arquivo .lis gerado
-            lis_path = acp_path.with_suffix('.lis')
+            # Procurar arquivo .lis gerado (case-insensitive, .lis ou .LIS)
+            lis_path = None
+            candidates: List[Path] = [
+                acp_path.with_suffix('.lis'),
+                acp_path.with_suffix('.LIS')
+            ]
+            for c in candidates:
+                if c.exists():
+                    lis_path = c
+                    break
+            # Se não encontrado diretamente, procurar por mesmo stem no diretório
+            if lis_path is None:
+                try:
+                    search_dirs = [acp_path.parent]
+                    if ext in ['.bat', '.cmd']:
+                        script_dir = Path(self.atpdraw_path).parent
+                        if script_dir.exists() and script_dir not in search_dirs:
+                            search_dirs.append(script_dir)
+                    for d in search_dirs:
+                        for p in list(d.glob('*.lis')) + list(d.glob('*.LIS')):
+                            if p.stem.lower() == acp_path.stem.lower():
+                                lis_path = p
+                                break
+                        if lis_path:
+                            break
+                except Exception:
+                    pass
 
             # Verificar código de retorno do processo ATP
+            log_entry = None
+            logs_dir = (output_dir or acp_path.parent) / 'logs'
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
+
             if result.returncode != 0:
                 print(f"❌ ATP retornou código {result.returncode}. Considerando falha na simulação.")
                 print(f"   Stdout: {result.stdout[:200]}")
                 print(f"   Stderr: {result.stderr[:200]}")
                 # Se um .lis vazio foi gerado, remover
-                if lis_path.exists():
+                if lis_path and lis_path.exists():
                     try:
                         lis_size = lis_path.stat().st_size
                     except Exception:
@@ -377,9 +418,33 @@ class AtpRunner:
                             print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
                         except Exception as e:
                             print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                log_entry = {
+                    'status': 'error',
+                    'returncode': result.returncode,
+                    'command': ' '.join(cmd),
+                    'cwd': str(run_cwd),
+                    'new_files': new_files,
+                    'stdout': result.stdout,
+                    'stderr': result.stderr
+                }
+                try:
+                    log_path.write_text('\n'.join([
+                        f"Status: {log_entry['status']}",
+                        f"Return code: {log_entry['returncode']}",
+                        f"CWD: {log_entry['cwd']}",
+                        f"Command: {log_entry['command']}",
+                        f"New files: {', '.join(log_entry['new_files']) if log_entry['new_files'] else '(none)'}",
+                        "---- STDOUT ----",
+                        log_entry['stdout'] or '(vazio)',
+                        "---- STDERR ----",
+                        log_entry['stderr'] or '(vazio)'
+                    ]), encoding='utf-8')
+                    print(f"📝 Log salvo em {log_path}")
+                except Exception as e:
+                    print(f"⚠️ Falha ao salvar log: {e}")
                 return None
             
-            if lis_path.exists():
+            if lis_path and lis_path.exists():
                 # Validar tamanho do .lis (> 0 bytes) antes de mover
                 try:
                     lis_size = lis_path.stat().st_size
@@ -396,6 +461,22 @@ class AtpRunner:
                         print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
                     except Exception as e:
                         print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                    # Log arquivo vazio
+                    try:
+                        log_path.write_text('\n'.join([
+                            "Status: empty_lis",
+                            f"Return code: {result.returncode}",
+                            f"CWD: {run_cwd}",
+                            f"Command: {' '.join(cmd)}",
+                            f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                            "---- STDOUT ----",
+                            result.stdout or '(vazio)',
+                            "---- STDERR ----",
+                            result.stderr or '(vazio)'
+                        ]), encoding='utf-8')
+                        print(f"📝 Log salvo em {log_path}")
+                    except Exception as e:
+                        print(f"⚠️ Falha ao salvar log: {e}")
                     return None
                 
                 # Mover para output_dir se especificado
@@ -410,6 +491,23 @@ class AtpRunner:
                     lis_path = new_lis
                 
                 print(f"✅ Simulação concluída: {lis_path}")
+                # Log sucesso
+                try:
+                    log_path.write_text('\n'.join([
+                        "Status: success",
+                        f"Return code: {result.returncode}",
+                        f"CWD: {run_cwd}",
+                        f"Command: {' '.join(cmd)}",
+                        f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                        f"LIS: {lis_path}",
+                        "---- STDOUT ----",
+                        result.stdout or '(vazio)',
+                        "---- STDERR ----",
+                        result.stderr or '(vazio)'
+                    ]), encoding='utf-8')
+                    print(f"📝 Log salvo em {log_path}")
+                except Exception as e:
+                    print(f"⚠️ Falha ao salvar log: {e}")
                 
                 # Limpar arquivos temporários
                 temp_atp.unlink(missing_ok=True)
@@ -419,6 +517,22 @@ class AtpRunner:
                 print(f"⚠️ Simulação executada mas .lis não foi gerado")
                 print(f"   Stdout: {result.stdout[:200]}")
                 print(f"   Stderr: {result.stderr[:200]}")
+                # Log ausência de .lis
+                try:
+                    log_path.write_text('\n'.join([
+                        "Status: no_lis",
+                        f"Return code: {result.returncode}",
+                        f"CWD: {run_cwd}",
+                        f"Command: {' '.join(cmd)}",
+                        f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                        "---- STDOUT ----",
+                        result.stdout or '(vazio)',
+                        "---- STDERR ----",
+                        result.stderr or '(vazio)'
+                    ]), encoding='utf-8')
+                    print(f"📝 Log salvo em {log_path}")
+                except Exception as e:
+                    print(f"⚠️ Falha ao salvar log: {e}")
                 return None
         
         except subprocess.TimeoutExpired:

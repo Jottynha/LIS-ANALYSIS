@@ -43,6 +43,16 @@ def _scan_lis(folder: Path):
     """Retorna arquivos .lis/.LIS ordenados por modificação (desc)."""
     folder = Path(folder)
     files = list(folder.glob('*.lis')) + list(folder.glob('*.LIS'))
+    # Deduplicar caminhos (Windows é case-insensitive e pode duplicar entre padrões)
+    seen = set()
+    unique_files = []
+    for f in files:
+        key = str(f).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_files.append(f)
+    files = unique_files
     try:
         files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     except Exception:
@@ -54,6 +64,16 @@ def _scan_acp(folder: Path):
     """Retorna arquivos .acp/.ACP ordenados por modificação (desc)."""
     folder = Path(folder)
     files = list(folder.glob('*.acp')) + list(folder.glob('*.ACP'))
+    # Deduplicar caminhos (Windows pode duplicar entre padrões)
+    seen = set()
+    unique_files = []
+    for f in files:
+        key = str(f).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_files.append(f)
+    files = unique_files
     try:
         files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     except Exception:

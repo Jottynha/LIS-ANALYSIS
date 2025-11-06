@@ -447,6 +447,16 @@ class LisAnalysisApp:
         btn_atp_exe.pack(side='left')
         _Tooltip(btn_atp_exe, 'Caminho para tpbig, atpmingw, runATP.bat ou equivalente')
 
+        # Linha para seleção de arquivo .acp
+        acp_file_frame = ttk.Frame(row1_8)
+        acp_file_frame.pack(fill='x', pady=(4,0))
+        ttk.Label(acp_file_frame, text='Arquivo .acp:').pack(side='left')
+        self.ent_acp_file = ttk.Entry(acp_file_frame, textvariable=self.acp_file_var, width=35)
+        self.ent_acp_file.pack(side='left', padx=6, fill='x', expand=True)
+        btn_acp_choose = ttk.Button(acp_file_frame, text='Escolher…', command=self._choose_acp_file)
+        btn_acp_choose.pack(side='left')
+        _Tooltip(btn_acp_choose, 'Seleciona o arquivo .acp para simulação ou modificação de RPI')
+
         # Linha de ações ATP: executar e ciclo completo
         atp_action_frame = ttk.Frame(row1_8)
         atp_action_frame.pack(fill='x', pady=(6,0))

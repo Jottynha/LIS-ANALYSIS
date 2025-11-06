@@ -331,21 +331,23 @@ class AtpRunner:
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
         
         try:
-            # Listar arquivos antes para detectar novos gerados
-            before_files = set(p.name for p in acp_path.parent.glob('*'))
-
-            # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
+            # Determinar extensão e diretório de execução
             cmd: List[str]
             ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
             run_cwd = acp_path.parent
             if ext in ['.bat', '.cmd']:
                 script_path = Path(self.atpdraw_path)
+                run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
+            # Listar arquivos antes para detectar novos gerados (no diretório de execução)
+            before_files = set(p.name for p in run_cwd.glob('*'))
+
+            # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
+            if ext in ['.bat', '.cmd']:
+                script_path = Path(self.atpdraw_path)
                 if os.name == 'nt':
-                    run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
                     cmd = ['cmd', '/c', str(script_path), str(temp_atp)]
                 else:
                     if shutil.which('wine'):
-                        run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
                         cmd = ['wine', 'cmd', '/c', str(script_path), str(temp_atp)]
                     else:
                         print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
@@ -354,16 +356,49 @@ class AtpRunner:
             else:
                 cmd = [self.atpdraw_path, str(temp_atp)]
 
-            # Executar ATP
-            result = subprocess.run(
-                cmd,
-                cwd=run_cwd,
-                capture_output=True,
-                text=True,
-                timeout=120  # 2 minutos timeout
-            )
+            # Executar ATP com controle de timeout robusto
+            result_stdout = ''
+            result_stderr = ''
+            result_returncode = None
+            try:
+                # Preferir Popen para poder encerrar árvore de processos em timeout
+                if os.name == 'nt':
+                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                else:
+                    # Em POSIX, criar novo grupo para matar filhos em cascata
+                    import os as _os, signal as _signal  # locais para evitar shadow
+                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
+                # Timeout padrão 300s (5 min)
+                timeout_sec = 300
+                result_stdout, result_stderr = proc.communicate(timeout=timeout_sec)
+                result_returncode = proc.returncode
+            except subprocess.TimeoutExpired:
+                # Tentar encerrar processo e filhos
+                if os.name == 'nt':
+                    try:
+                        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        import os as _os, signal as _signal
+                        _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+                    except Exception:
+                        pass
+                result_returncode = -9
+                result_stdout = (result_stdout or '')
+                result_stderr = (result_stderr or '') + f"\n[timeout] Processo excedeu 300s e foi terminado."
+            except Exception as e:
+                # Falha genérica ao executar
+                try:
+                    if proc and proc.poll() is None:
+                        proc.kill()
+                except Exception:
+                    pass
+                result_returncode = -1
+                result_stderr = f"Falha ao executar ATP: {e}"
 
-            # Listar arquivos depois
+            # Listar arquivos depois (no diretório de execução)
             after_files = set(p.name for p in run_cwd.glob('*'))
             new_files = sorted(after_files - before_files)
             
@@ -402,10 +437,10 @@ class AtpRunner:
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
 
-            if result.returncode != 0:
-                print(f"❌ ATP retornou código {result.returncode}. Considerando falha na simulação.")
-                print(f"   Stdout: {result.stdout[:200]}")
-                print(f"   Stderr: {result.stderr[:200]}")
+            if result_returncode != 0:
+                print(f"❌ ATP retornou código {result_returncode}. Considerando falha na simulação.")
+                print(f"   Stdout: {result_stdout[:200]}")
+                print(f"   Stderr: {result_stderr[:200]}")
                 # Se um .lis vazio foi gerado, remover
                 if lis_path and lis_path.exists():
                     try:
@@ -420,12 +455,12 @@ class AtpRunner:
                             print(f"⚠️ Não foi possível remover .lis vazio: {e}")
                 log_entry = {
                     'status': 'error',
-                    'returncode': result.returncode,
+                    'returncode': result_returncode,
                     'command': ' '.join(cmd),
                     'cwd': str(run_cwd),
                     'new_files': new_files,
-                    'stdout': result.stdout,
-                    'stderr': result.stderr
+                    'stdout': result_stdout,
+                    'stderr': result_stderr
                 }
                 try:
                     log_path.write_text('\n'.join([
@@ -453,8 +488,8 @@ class AtpRunner:
                 
                 if lis_size <= 0:
                     print("⚠️ .lis gerado, porém vazio (0 bytes). Considerando falha na simulação.")
-                    print(f"   Stdout: {result.stdout[:200]}")
-                    print(f"   Stderr: {result.stderr[:200]}")
+                    print(f"   Stdout: {result_stdout[:200]}")
+                    print(f"   Stderr: {result_stderr[:200]}")
                     # Remover arquivo vazio para evitar acúmulo
                     try:
                         lis_path.unlink(missing_ok=True)
@@ -465,14 +500,14 @@ class AtpRunner:
                     try:
                         log_path.write_text('\n'.join([
                             "Status: empty_lis",
-                            f"Return code: {result.returncode}",
+                            f"Return code: {result_returncode}",
                             f"CWD: {run_cwd}",
                             f"Command: {' '.join(cmd)}",
                             f"New files: {', '.join(new_files) if new_files else '(none)'}",
                             "---- STDOUT ----",
-                            result.stdout or '(vazio)',
+                            result_stdout or '(vazio)',
                             "---- STDERR ----",
-                            result.stderr or '(vazio)'
+                            result_stderr or '(vazio)'
                         ]), encoding='utf-8')
                         print(f"📝 Log salvo em {log_path}")
                     except Exception as e:
@@ -495,15 +530,15 @@ class AtpRunner:
                 try:
                     log_path.write_text('\n'.join([
                         "Status: success",
-                        f"Return code: {result.returncode}",
+                        f"Return code: {result_returncode}",
                         f"CWD: {run_cwd}",
                         f"Command: {' '.join(cmd)}",
                         f"New files: {', '.join(new_files) if new_files else '(none)'}",
                         f"LIS: {lis_path}",
                         "---- STDOUT ----",
-                        result.stdout or '(vazio)',
+                        result_stdout or '(vazio)',
                         "---- STDERR ----",
-                        result.stderr or '(vazio)'
+                        result_stderr or '(vazio)'
                     ]), encoding='utf-8')
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
@@ -515,20 +550,20 @@ class AtpRunner:
                 return lis_path
             else:
                 print(f"⚠️ Simulação executada mas .lis não foi gerado")
-                print(f"   Stdout: {result.stdout[:200]}")
-                print(f"   Stderr: {result.stderr[:200]}")
+                print(f"   Stdout: {result_stdout[:200]}")
+                print(f"   Stderr: {result_stderr[:200]}")
                 # Log ausência de .lis
                 try:
                     log_path.write_text('\n'.join([
                         "Status: no_lis",
-                        f"Return code: {result.returncode}",
+                        f"Return code: {result_returncode}",
                         f"CWD: {run_cwd}",
                         f"Command: {' '.join(cmd)}",
                         f"New files: {', '.join(new_files) if new_files else '(none)'}",
                         "---- STDOUT ----",
-                        result.stdout or '(vazio)',
+                        result_stdout or '(vazio)',
                         "---- STDERR ----",
-                        result.stderr or '(vazio)'
+                        result_stderr or '(vazio)'
                     ]), encoding='utf-8')
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
@@ -536,7 +571,7 @@ class AtpRunner:
                 return None
         
         except subprocess.TimeoutExpired:
-            print("❌ Timeout: simulação demorou mais de 5 minutos")
+            print("❌ Timeout: simulação excedeu o tempo limite e foi interrompida")
             return None
         except Exception as e:
             print(f"❌ Erro ao executar ATP: {e}")

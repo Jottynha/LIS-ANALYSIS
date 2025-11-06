@@ -338,8 +338,18 @@ class AtpRunner:
             if ext in ['.bat', '.cmd']:
                 script_path = Path(self.atpdraw_path)
                 run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
-            # Listar arquivos antes para detectar novos gerados (no diretório de execução)
-            before_files = set(p.name for p in run_cwd.glob('*'))
+            # Determinar diretórios que serão monitorados para novos arquivos
+            search_dirs: List[Path] = [run_cwd]
+            if acp_path.parent not in search_dirs:
+                search_dirs.append(acp_path.parent)
+            # Se for .bat, também verificar pasta do script (pode ser diferente)
+            if ext in ['.bat', '.cmd']:
+                script_dir = Path(self.atpdraw_path).parent
+                if script_dir.exists() and script_dir not in search_dirs:
+                    search_dirs.append(script_dir)
+
+            # Listar arquivos antes para detectar novos gerados em cada diretório
+            before_files = {str(d): set(p.name for p in d.glob('*')) for d in search_dirs if d.exists()}
 
             # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
             if ext in ['.bat', '.cmd']:
@@ -368,8 +378,14 @@ class AtpRunner:
                     # Em POSIX, criar novo grupo para matar filhos em cascata
                     import os as _os, signal as _signal  # locais para evitar shadow
                     proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
-                # Timeout padrão 300s (5 min)
+                # Timeout padrão 300s (5 min). Pode ser sobrescrito pela variável de ambiente ATP_TIMEOUT
                 timeout_sec = 300
+                try:
+                    env_timeout = os.environ.get('ATP_TIMEOUT')
+                    if env_timeout:
+                        timeout_sec = int(env_timeout)
+                except Exception:
+                    pass
                 result_stdout, result_stderr = proc.communicate(timeout=timeout_sec)
                 result_returncode = proc.returncode
             except subprocess.TimeoutExpired:
@@ -398,9 +414,18 @@ class AtpRunner:
                 result_returncode = -1
                 result_stderr = f"Falha ao executar ATP: {e}"
 
-            # Listar arquivos depois (no diretório de execução)
-            after_files = set(p.name for p in run_cwd.glob('*'))
-            new_files = sorted(after_files - before_files)
+            # Listar arquivos depois (em todos os diretórios monitorados)
+            after_files = {str(d): set(p.name for p in d.glob('*')) for d in search_dirs if d.exists()}
+            new_files_per_dir = {}
+            for d in before_files:
+                before_set = before_files.get(d, set())
+                after_set = after_files.get(d, set())
+                new_files_per_dir[d] = sorted(after_set - before_set)
+            # Agregar lista geral
+            new_files = []
+            for v in new_files_per_dir.values():
+                new_files.extend(v)
+            new_files = sorted(set(new_files))
             
             # Procurar arquivo .lis gerado (case-insensitive, .lis ou .LIS)
             lis_path = None
@@ -459,21 +484,28 @@ class AtpRunner:
                     'command': ' '.join(cmd),
                     'cwd': str(run_cwd),
                     'new_files': new_files,
+                    'new_files_per_dir': new_files_per_dir,
                     'stdout': result_stdout,
                     'stderr': result_stderr
                 }
                 try:
-                    log_path.write_text('\n'.join([
+                    lines = [
                         f"Status: {log_entry['status']}",
                         f"Return code: {log_entry['returncode']}",
                         f"CWD: {log_entry['cwd']}",
                         f"Command: {log_entry['command']}",
                         f"New files: {', '.join(log_entry['new_files']) if log_entry['new_files'] else '(none)'}",
+                        "New files per directory:",
+                    ]
+                    for d, files in log_entry['new_files_per_dir'].items():
+                        lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
+                    lines.extend([
                         "---- STDOUT ----",
                         log_entry['stdout'] or '(vazio)',
                         "---- STDERR ----",
                         log_entry['stderr'] or '(vazio)'
-                    ]), encoding='utf-8')
+                    ])
+                    log_path.write_text('\n'.join(lines), encoding='utf-8')
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
                     print(f"⚠️ Falha ao salvar log: {e}")
@@ -498,17 +530,23 @@ class AtpRunner:
                         print(f"⚠️ Não foi possível remover .lis vazio: {e}")
                     # Log arquivo vazio
                     try:
-                        log_path.write_text('\n'.join([
+                        lines = [
                             "Status: empty_lis",
                             f"Return code: {result_returncode}",
                             f"CWD: {run_cwd}",
                             f"Command: {' '.join(cmd)}",
                             f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                            "New files per directory:",
+                        ]
+                        for d, files in new_files_per_dir.items():
+                            lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
+                        lines.extend([
                             "---- STDOUT ----",
                             result_stdout or '(vazio)',
                             "---- STDERR ----",
                             result_stderr or '(vazio)'
-                        ]), encoding='utf-8')
+                        ])
+                        log_path.write_text('\n'.join(lines), encoding='utf-8')
                         print(f"📝 Log salvo em {log_path}")
                     except Exception as e:
                         print(f"⚠️ Falha ao salvar log: {e}")
@@ -528,18 +566,24 @@ class AtpRunner:
                 print(f"✅ Simulação concluída: {lis_path}")
                 # Log sucesso
                 try:
-                    log_path.write_text('\n'.join([
+                    lines = [
                         "Status: success",
                         f"Return code: {result_returncode}",
                         f"CWD: {run_cwd}",
                         f"Command: {' '.join(cmd)}",
                         f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                        "New files per directory:",
+                    ]
+                    for d, files in new_files_per_dir.items():
+                        lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
+                    lines.extend([
                         f"LIS: {lis_path}",
                         "---- STDOUT ----",
                         result_stdout or '(vazio)',
                         "---- STDERR ----",
                         result_stderr or '(vazio)'
-                    ]), encoding='utf-8')
+                    ])
+                    log_path.write_text('\n'.join(lines), encoding='utf-8')
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
                     print(f"⚠️ Falha ao salvar log: {e}")

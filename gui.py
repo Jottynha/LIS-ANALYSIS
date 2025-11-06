@@ -437,14 +437,15 @@ class LisAnalysisApp:
         # Linha para executável ATP (fixo)
         atp_exe_frame = ttk.Frame(row1_8)
         atp_exe_frame.pack(fill='x', pady=(8,0))
-        
         ttk.Label(atp_exe_frame, text='Executável ATP:').pack(side='left')
+        # Variáveis relacionadas ao ATP
         self.atp_exe_var = tk.StringVar()
+        self.acp_file_var = tk.StringVar()
         self.ent_atp_exe = ttk.Entry(atp_exe_frame, textvariable=self.atp_exe_var, width=35)
         self.ent_atp_exe.pack(side='left', padx=6, fill='x', expand=True)
         btn_atp_exe = ttk.Button(atp_exe_frame, text='Escolher…', command=self._choose_atp_executable)
         btn_atp_exe.pack(side='left')
-        _Tooltip(btn_atp_exe, 'Caminho para tpbig ou atpmingw (opcional)')
+        _Tooltip(btn_atp_exe, 'Caminho para tpbig, atpmingw, runATP.bat ou equivalente')
 
         # Linha de ações ATP: executar e ciclo completo
         atp_action_frame = ttk.Frame(row1_8)

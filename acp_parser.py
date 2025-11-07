@@ -466,18 +466,103 @@ class AtpRunner:
                 print(f"❌ ATP retornou código {result_returncode}. Considerando falha na simulação.")
                 print(f"   Stdout: {result_stdout[:200]}")
                 print(f"   Stderr: {result_stderr[:200]}")
-                # Se um .lis vazio foi gerado, remover
+                # Se um .lis foi gerado e NÃO está vazio, vamos aproveitar o resultado mesmo com timeout/erro
+                effective_lis: Optional[Path] = None
+                lis_size = 0
                 if lis_path and lis_path.exists():
                     try:
                         lis_size = lis_path.stat().st_size
                     except Exception:
                         lis_size = 0
-                    if lis_size <= 0:
+                    if lis_size > 0:
+                        effective_lis = lis_path
+                if effective_lis is not None:
+                    # Mover para output_dir se especificado
+                    if output_dir:
+                        output_dir = Path(output_dir)
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        new_lis = output_dir / f"{acp_path.stem}_{timestamp}.lis"
                         try:
-                            lis_path.unlink(missing_ok=True)
-                            print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
-                        except Exception as e:
-                            print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                            shutil.move(effective_lis, new_lis)
+                            effective_lis = new_lis
+                        except Exception:
+                            # Se mover falhar, manter original
+                            pass
+                    # Detectar arquivo .dbg correspondente e mover também
+                    dbg_path = None
+                    for dir_str, files in new_files_per_dir.items():
+                        for fname in files:
+                            if fname.lower().endswith('.dbg') and Path(fname).stem.lower() == acp_path.stem.lower():
+                                candidate = Path(dir_str) / fname
+                                if candidate.exists():
+                                    dbg_path = candidate
+                                    break
+                        if dbg_path:
+                            break
+                    moved_dbg_path = None
+                    if dbg_path and output_dir:
+                        try:
+                            moved_dbg_path = output_dir / f"{acp_path.stem}_{timestamp}.dbg"
+                            shutil.move(dbg_path, moved_dbg_path)
+                            dbg_path = moved_dbg_path
+                        except Exception:
+                            pass
+                    # Log como "timeout_with_lis" e retornar caminho
+                    try:
+                        lines = [
+                            "Status: timeout_with_lis",
+                            f"Return code: {result_returncode}",
+                            f"CWD: {run_cwd}",
+                            f"Command: {' '.join(cmd)}",
+                            f"New files: {', '.join(new_files) if new_files else '(none)'}",
+                            "New files per directory:",
+                        ]
+                        for d, files in new_files_per_dir.items():
+                            lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
+                        lines.extend([
+                            f"LIS: {effective_lis} (gerado apesar do erro/timeout; pode estar incompleto)",
+                            f"DBG: {dbg_path if dbg_path else '(none)'}",
+                            "---- STDOUT ----",
+                            result_stdout or '(vazio)',
+                            "---- STDERR ----",
+                            result_stderr or '(vazio)'
+                        ])
+                        log_path.write_text('\n'.join(lines), encoding='utf-8')
+                        print(f"📝 Log salvo em {log_path}")
+                    except Exception as e:
+                        print(f"⚠️ Falha ao salvar log: {e}")
+                    # Limpeza automática de temporários (*.tmp, *.bin) gerados durante a simulação
+                    removed_temp: List[Path] = []
+                    for dir_str, files in new_files_per_dir.items():
+                        base_dir = Path(dir_str)
+                        for fname in files:
+                            lower = fname.lower()
+                            if lower.endswith('.tmp') or lower.endswith('.bin'):
+                                fpath = base_dir / fname
+                                try:
+                                    fpath.unlink(missing_ok=True)
+                                    removed_temp.append(fpath)
+                                except Exception:
+                                    pass
+                    if removed_temp:
+                        print(f"🧹 Temporários removidos: {', '.join(p.name for p in removed_temp)}")
+                        try:
+                            with log_path.open('a', encoding='utf-8') as lf:
+                                lf.write('\nRemoved temps: ' + ', '.join(p.name for p in removed_temp) + '\n')
+                        except Exception:
+                            pass
+                    # Limpar temporário .atp e retornar .lis aproveitado
+                    temp_atp.unlink(missing_ok=True)
+                    return effective_lis
+                # Caso contrário: se existir .lis vazio, remover e registrar erro
+                if lis_path and lis_size <= 0:
+                    try:
+                        lis_path.unlink(missing_ok=True)
+                        print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
+                    except Exception as e:
+                        print(f"⚠️ Não foi possível remover .lis vazio: {e}")
+                # Log erro padrão
                 log_entry = {
                     'status': 'error',
                     'returncode': result_returncode,
@@ -562,6 +647,26 @@ class AtpRunner:
                     
                     shutil.move(lis_path, new_lis)
                     lis_path = new_lis
+
+                # Detectar arquivo .dbg correspondente e mover também
+                dbg_path = None
+                for dir_str, files in new_files_per_dir.items():
+                    for fname in files:
+                        if fname.lower().endswith('.dbg') and Path(fname).stem.lower() == acp_path.stem.lower():
+                            candidate = Path(dir_str) / fname
+                            if candidate.exists():
+                                dbg_path = candidate
+                                break
+                    if dbg_path:
+                        break
+                moved_dbg_path = None
+                if dbg_path and output_dir:
+                    try:
+                        moved_dbg_path = output_dir / f"{acp_path.stem}_{timestamp}.dbg"
+                        shutil.move(dbg_path, moved_dbg_path)
+                        dbg_path = moved_dbg_path
+                    except Exception:
+                        pass
                 
                 print(f"✅ Simulação concluída: {lis_path}")
                 # Log sucesso
@@ -578,6 +683,7 @@ class AtpRunner:
                         lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
                     lines.extend([
                         f"LIS: {lis_path}",
+                        f"DBG: {dbg_path if dbg_path else '(none)'}",
                         "---- STDOUT ----",
                         result_stdout or '(vazio)',
                         "---- STDERR ----",
@@ -587,6 +693,29 @@ class AtpRunner:
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
                     print(f"⚠️ Falha ao salvar log: {e}")
+
+                # Limpeza automática de temporários (*.tmp, *.bin) gerados durante a simulação
+                removed_temp: List[Path] = []
+                for dir_str, files in new_files_per_dir.items():
+                    base_dir = Path(dir_str)
+                    for fname in files:
+                        lower = fname.lower()
+                        # Mantém .lis e .dbg; remove .tmp e .bin (scratch)
+                        if lower.endswith('.tmp') or lower.endswith('.bin'):
+                            fpath = base_dir / fname
+                            try:
+                                fpath.unlink(missing_ok=True)
+                                removed_temp.append(fpath)
+                            except Exception:
+                                pass
+                if removed_temp:
+                    print(f"🧹 Temporários removidos: {', '.join(p.name for p in removed_temp)}")
+                    # Acrescentar informação ao log (append)
+                    try:
+                        with log_path.open('a', encoding='utf-8') as lf:
+                            lf.write('\nRemoved temps: ' + ', '.join(p.name for p in removed_temp) + '\n')
+                    except Exception:
+                        pass
                 
                 # Limpar arquivos temporários
                 temp_atp.unlink(missing_ok=True)

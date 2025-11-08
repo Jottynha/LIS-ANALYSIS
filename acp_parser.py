@@ -334,10 +334,44 @@ class AtpRunner:
             # Determinar extensão e diretório de execução
             cmd: List[str]
             ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
-            # Forçar CWD para a pasta do solver (se possível). Fallback: pasta do .acp
+            # Política: manter CWD no solver para achar 'startup' e outros artefatos
             solver_executable = shutil.which(self.atpdraw_path) or self.atpdraw_path
             solver_path = Path(solver_executable)
             run_cwd = solver_path.parent if solver_path.exists() else acp_path.parent
+
+            # Sanitizar nome do deck e copiar para pasta do solver
+            sanitized_name = re.sub(r'[=\s]+', '_', temp_atp.name)
+            deck_in_solver = run_cwd / sanitized_name
+            try:
+                shutil.copy2(temp_atp, deck_in_solver)
+            except Exception:
+                # Fallback: usar caminho original
+                deck_in_solver = temp_atp
+
+            # Heurística simples para copiar includes para o CWD do solver
+            try:
+                include_pat = re.compile(r'\b(INCLUDE|\$INCLUDE|\.INC)\b', re.IGNORECASE)
+                for line in atp_text.splitlines():
+                    if include_pat.search(line):
+                        # Tenta extrair caminho entre aspas, caso contrário último token
+                        m = re.search(r'"([^"]+)"|\'([^\']+)\'', line)
+                        candidate = None
+                        if m:
+                            candidate = m.group(1) or m.group(2)
+                        else:
+                            parts = line.strip().split()
+                            candidate = parts[-1] if parts else None
+                        if candidate:
+                            inc_path = (acp_path.parent / candidate).resolve()
+                            if inc_path.exists() and inc_path.is_file():
+                                target = run_cwd / inc_path.name
+                                if not target.exists():
+                                    try:
+                                        shutil.copy2(inc_path, target)
+                                    except Exception:
+                                        pass
+            except Exception:
+                pass
 
             # Diretório de saída efetivo: se não especificado, usar pasta /ACP do projeto
             effective_output_dir = Path(output_dir) if output_dir else self._default_output_dir(acp_path)
@@ -355,19 +389,21 @@ class AtpRunner:
             before_files = {str(d): set(p.name for p in d.glob('*')) for d in search_dirs if d.exists()}
 
             # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
+            # Usar somente o nome do deck se ele estiver no CWD
+            deck_arg = deck_in_solver.name if deck_in_solver.parent == run_cwd else str(deck_in_solver)
             if ext in ['.bat', '.cmd']:
                 script_path = Path(self.atpdraw_path)
                 if os.name == 'nt':
-                    cmd = ['cmd', '/c', str(script_path), str(temp_atp)]
+                    cmd = ['cmd', '/c', str(script_path), deck_arg]
                 else:
                     if shutil.which('wine'):
-                        cmd = ['wine', 'cmd', '/c', str(script_path), str(temp_atp)]
+                        cmd = ['wine', 'cmd', '/c', str(script_path), deck_arg]
                     else:
                         print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
                         print("💡 Use tpbig/atpmingw nativo ou instale o Wine para usar scripts .bat.")
                         return None
             else:
-                cmd = [self.atpdraw_path, str(temp_atp)]
+                cmd = [self.atpdraw_path, deck_arg]
 
             # Executar ATP com controle de timeout robusto
             result_stdout = ''
@@ -376,11 +412,11 @@ class AtpRunner:
             try:
                 # Preferir Popen para poder encerrar árvore de processos em timeout
                 if os.name == 'nt':
-                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True)
                 else:
                     # Em POSIX, criar novo grupo para matar filhos em cascata
                     import os as _os, signal as _signal  # locais para evitar shadow
-                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
+                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
                 # Timeout padrão 300s (5 min). Pode ser sobrescrito pela variável de ambiente ATP_TIMEOUT
                 timeout_sec = 300
                 try:
@@ -389,7 +425,8 @@ class AtpRunner:
                         timeout_sec = int(env_timeout)
                 except Exception:
                     pass
-                result_stdout, result_stderr = proc.communicate(timeout=timeout_sec)
+                # Enviar 'go' para avançar caso haja PAUSE no deck; se não necessário, é ignorado
+                result_stdout, result_stderr = proc.communicate(input='go\n', timeout=timeout_sec)
                 result_returncode = proc.returncode
             except subprocess.TimeoutExpired:
                 # Tentar encerrar processo e filhos
@@ -440,17 +477,14 @@ class AtpRunner:
                 if c.exists():
                     lis_path = c
                     break
-            # Se não encontrado diretamente, procurar por mesmo stem no diretório
+            # Se não encontrado diretamente, procurar por mesmo stem nos diretórios monitorados
             if lis_path is None:
                 try:
-                    search_dirs = [acp_path.parent]
-                    if ext in ['.bat', '.cmd']:
-                        script_dir = Path(self.atpdraw_path).parent
-                        if script_dir.exists() and script_dir not in search_dirs:
-                            search_dirs.append(script_dir)
-                    for d in search_dirs:
+                    extra_search = list(search_dirs)  # já inclui run_cwd e pasta do .acp
+                    sanitized_stem = Path(deck_in_solver.name).stem if deck_in_solver else acp_path.stem
+                    for d in extra_search:
                         for p in list(d.glob('*.lis')) + list(d.glob('*.LIS')):
-                            if p.stem.lower() == acp_path.stem.lower():
+                            if p.stem.lower() in (acp_path.stem.lower(), sanitized_stem.lower()):
                                 lis_path = p
                                 break
                         if lis_path:

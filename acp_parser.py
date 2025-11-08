@@ -7,7 +7,7 @@ import zipfile
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any, cast
 import re
 import subprocess
 import shutil
@@ -64,7 +64,7 @@ class AcpParser:
             print(f"❌ Erro ao extrair ATP: {e}")
             return None
     
-    def find_control_parameters(self) -> Dict[str, any]:
+    def find_control_parameters(self) -> Dict[str, Any]:
         """
         Procura por parâmetros de controle no arquivo ATP.
         Foca em RPI (Resistência de Pré-Inserção).
@@ -318,15 +318,23 @@ class AtpRunner:
         
         # Extrair ATP do .acp
         parser = AcpParser(acp_path)
-        atp_text = parser.extract_atp_from_acp()
+        atp_text_opt = parser.extract_atp_from_acp()
         
-        if not atp_text:
+        if not atp_text_opt:
             return None
+        # Ajuda o type checker a entender que agora é str
+        atp_text: str = atp_text_opt
         
         # Criar arquivo temporário .atp
         temp_atp = acp_path.with_suffix('.atp')
-        with open(temp_atp, 'w', encoding='windows-1252', errors='ignore') as f:
-            f.write(atp_text)
+        deck_content: str = atp_text.replace('\x00', '')  # remover NULs que causam inspeção/pausa
+        if os.name == 'nt':
+            # Normalizar quebras de linha e tabs para evitar travas do STARTUP (UNIXON/NOTAB)
+            deck_content = deck_content.replace('\r\n', '\n').replace('\r', '\n')
+            deck_content = deck_content.replace('\t', '    ')
+            deck_content = deck_content.replace('\n', '\r\n')
+        with open(temp_atp, 'w', encoding='windows-1252', errors='ignore', newline='') as f:
+            f.write(deck_content)
         
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
         

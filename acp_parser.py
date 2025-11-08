@@ -334,10 +334,13 @@ class AtpRunner:
             # Determinar extensão e diretório de execução
             cmd: List[str]
             ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
-            run_cwd = acp_path.parent
-            if ext in ['.bat', '.cmd']:
-                script_path = Path(self.atpdraw_path)
-                run_cwd = script_path.parent if script_path.parent.exists() else acp_path.parent
+            # Forçar CWD para a pasta do solver (se possível). Fallback: pasta do .acp
+            solver_executable = shutil.which(self.atpdraw_path) or self.atpdraw_path
+            solver_path = Path(solver_executable)
+            run_cwd = solver_path.parent if solver_path.exists() else acp_path.parent
+
+            # Diretório de saída efetivo: se não especificado, usar pasta /ACP do projeto
+            effective_output_dir = Path(output_dir) if output_dir else self._default_output_dir(acp_path)
             # Determinar diretórios que serão monitorados para novos arquivos
             search_dirs: List[Path] = [run_cwd]
             if acp_path.parent not in search_dirs:
@@ -457,7 +460,7 @@ class AtpRunner:
 
             # Verificar código de retorno do processo ATP
             log_entry = None
-            logs_dir = (output_dir or acp_path.parent) / 'logs'
+            logs_dir = effective_output_dir / 'logs'
             logs_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
@@ -477,18 +480,16 @@ class AtpRunner:
                     if lis_size > 0:
                         effective_lis = lis_path
                 if effective_lis is not None:
-                    # Mover para output_dir se especificado
-                    if output_dir:
-                        output_dir = Path(output_dir)
-                        output_dir.mkdir(parents=True, exist_ok=True)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        new_lis = output_dir / f"{acp_path.stem}_{timestamp}.lis"
-                        try:
-                            shutil.move(effective_lis, new_lis)
-                            effective_lis = new_lis
-                        except Exception:
-                            # Se mover falhar, manter original
-                            pass
+                    # Mover sempre para o diretório de saída efetivo
+                    effective_output_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    new_lis = effective_output_dir / f"{acp_path.stem}_{timestamp}.lis"
+                    try:
+                        shutil.move(effective_lis, new_lis)
+                        effective_lis = new_lis
+                    except Exception:
+                        # Se mover falhar, manter original
+                        pass
                     # Detectar arquivo .dbg correspondente e mover também
                     dbg_path = None
                     for dir_str, files in new_files_per_dir.items():
@@ -501,9 +502,9 @@ class AtpRunner:
                         if dbg_path:
                             break
                     moved_dbg_path = None
-                    if dbg_path and output_dir:
+                    if dbg_path:
                         try:
-                            moved_dbg_path = output_dir / f"{acp_path.stem}_{timestamp}.dbg"
+                            moved_dbg_path = effective_output_dir / f"{acp_path.stem}_{timestamp}.dbg"
                             shutil.move(dbg_path, moved_dbg_path)
                             dbg_path = moved_dbg_path
                         except Exception:
@@ -637,16 +638,14 @@ class AtpRunner:
                         print(f"⚠️ Falha ao salvar log: {e}")
                     return None
                 
-                # Mover para output_dir se especificado
-                if output_dir:
-                    output_dir = Path(output_dir)
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    new_lis = output_dir / f"{acp_path.stem}_{timestamp}.lis"
-                    
-                    shutil.move(lis_path, new_lis)
-                    lis_path = new_lis
+                # Mover sempre para o diretório de saída efetivo (ACP por padrão)
+                effective_output_dir.mkdir(parents=True, exist_ok=True)
+                
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                new_lis = effective_output_dir / f"{acp_path.stem}_{timestamp}.lis"
+                
+                shutil.move(lis_path, new_lis)
+                lis_path = new_lis
 
                 # Detectar arquivo .dbg correspondente e mover também
                 dbg_path = None
@@ -660,9 +659,9 @@ class AtpRunner:
                     if dbg_path:
                         break
                 moved_dbg_path = None
-                if dbg_path and output_dir:
+                if dbg_path:
                     try:
-                        moved_dbg_path = output_dir / f"{acp_path.stem}_{timestamp}.dbg"
+                        moved_dbg_path = effective_output_dir / f"{acp_path.stem}_{timestamp}.dbg"
                         shutil.move(dbg_path, moved_dbg_path)
                         dbg_path = moved_dbg_path
                     except Exception:
@@ -752,6 +751,20 @@ class AtpRunner:
         finally:
             # Limpar arquivos temporários
             temp_atp.unlink(missing_ok=True)
+
+    def _default_output_dir(self, acp_path: Path) -> Path:
+        """Resolve diretório padrão de saída para .lis/.dbg.
+        Preferir a pasta 'ACP' do projeto; se o arquivo estiver dentro dela, usar a própria.
+        """
+        try:
+            # Se o .acp já está em uma pasta chamada ACP, usar essa pasta
+            if acp_path and acp_path.parent.name.lower() == 'acp':
+                return acp_path.parent
+        except Exception:
+            pass
+        # Caso contrário, usar a pasta ACP ao lado deste script
+        project_root = Path(__file__).parent
+        return project_root / 'ACP'
 
 
 # ==================== FUNÇÕES DE CONVENIÊNCIA ====================

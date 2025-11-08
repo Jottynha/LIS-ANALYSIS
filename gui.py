@@ -1193,7 +1193,8 @@ class LisAnalysisApp:
             messagebox.showerror('Erro', f'Arquivo não encontrado:\n{acp_path}')
             return
         
-        output_dir = Path(self.outdir_var.get())
+        # Deixe o AtpRunner decidir o diretório padrão (ACP/) para .lis/.dbg
+        output_dir = None
         atp_exe = self.atp_exe_var.get() or None
         
         self.status_var.set('Executando simulação ATP...')
@@ -1376,7 +1377,8 @@ class LisAnalysisApp:
         
         def full_cycle_thread():
             try:
-                output_dir = Path(self.outdir_var.get())
+                # Simulação salva .lis/.dbg em ACP/ por padrão
+                output_dir = None
                 atp_exe = self.atp_exe_var.get() or None
                 
                 # Etapa 1: Modificar RPI

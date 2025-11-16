@@ -13,10 +13,15 @@ import argparse
 from typing import Optional, Tuple, List, Dict
 import pandas as pd
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from openpyxl.utils import get_column_letter
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+# Configurar matplotlib para usar backend não-GUI por padrão (evita warnings em threads)
+# O backend será alterado para TkAgg apenas quando mostrar=True
+matplotlib.use('Agg')
 
 # ------------------ Configurações e regex ------------------
 START_MARKER = "The following is a distribution of peak overvoltages"
@@ -279,7 +284,11 @@ def save_df_to_excel_only(df: pd.DataFrame, out_path: Path, sheet_name: str = 'D
         
         # Autoajustar largura das colunas
         try:
-            max_len = max(df_to_save[col].astype(str).map(len).max(), len(col)) + 2
+            col_max_len = df_to_save[col].astype(str).map(len).max()
+            # Garantir que é um escalar
+            if hasattr(col_max_len, 'item'):
+                col_max_len = col_max_len.item()
+            max_len = max(int(col_max_len), len(col)) + 2
         except Exception:
             max_len = len(col) + 2
         ws.column_dimensions[get_column_letter(i)].width = min(max_len, 30)  # Máximo de 30
@@ -498,8 +507,14 @@ def escrever_estatisticas_excel(excel_path: Path, computed_stats: dict,
                 # Grouped
                 cell = ws.cell(row=row, column=2)
                 if g is not None:
-                    cell.value = float(g)
-                    cell.number_format = '0.000000E+00'
+                    # Converter para float escalar (caso seja Series/array)
+                    try:
+                        g_val = float(g) if not isinstance(g, (list, tuple)) else float(g[0])
+                    except (TypeError, ValueError, IndexError):
+                        g_val = None
+                    if g_val is not None:
+                        cell.value = g_val
+                        cell.number_format = '0.000000E+00'
                 cell.font = data_font
                 cell.alignment = center_alignment
                 cell.border = thin_border
@@ -507,8 +522,14 @@ def escrever_estatisticas_excel(excel_path: Path, computed_stats: dict,
                 # Ungrouped
                 cell = ws.cell(row=row, column=3)
                 if u is not None:
-                    cell.value = float(u)
-                    cell.number_format = '0.000000E+00'
+                    # Converter para float escalar (caso seja Series/array)
+                    try:
+                        u_val = float(u) if not isinstance(u, (list, tuple)) else float(u[0])
+                    except (TypeError, ValueError, IndexError):
+                        u_val = None
+                    if u_val is not None:
+                        cell.value = u_val
+                        cell.number_format = '0.000000E+00'
                 cell.font = data_font
                 cell.alignment = center_alignment
                 cell.border = thin_border
@@ -580,10 +601,17 @@ def escrever_estatisticas_excel(excel_path: Path, computed_stats: dict,
         cell = ws.cell(row=row, column=2)
         val = computed_stats.get(key)
         if isinstance(val, (int, float)) and not (isinstance(val, float) and np.isnan(val)):
-            cell.value = float(val)
-            fmt = number_formats.get(key)
-            if fmt:
-                cell.number_format = fmt
+            # Converter para float escalar seguro
+            try:
+                if hasattr(val, 'item'):
+                    cell.value = val.item()
+                else:
+                    cell.value = float(val)
+                fmt = number_formats.get(key)
+                if fmt:
+                    cell.number_format = fmt
+            except (TypeError, ValueError, AttributeError):
+                cell.value = str(val) if val else '-'
         else:
             cell.value = str(val) if val else '-'
         cell.font = data_font
@@ -795,16 +823,50 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
     ax2.set_ylim(0, 100)
 
     # caixa de estatísticas (resumo visual)
+    # Converter todos os valores para float escalar seguro
+    def _safe_float(val):
+        if val is None:
+            return float('nan')
+        # Se for array/Series, pegar primeiro elemento
+        if hasattr(val, '__len__') and not isinstance(val, str):
+            try:
+                if len(val) > 0:
+                    val = val[0] if hasattr(val, '__getitem__') else float(val)
+                else:
+                    return float('nan')
+            except (TypeError, IndexError):
+                pass
+        # Se tiver método .item() (numpy scalar), usar
+        if hasattr(val, 'item'):
+            try:
+                return val.item()
+            except (ValueError, TypeError):
+                pass
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return float('nan')
+    
+    mu_safe = _safe_float(mu)
+    sigma_safe = _safe_float(sigma)
+    median_safe = _safe_float(computed_stats.get('median', float('nan')))
+    mode_safe = _safe_float(computed_stats.get('mode', float('nan')))
+    total_freq_safe = _safe_float(computed_stats.get('total_freq', float('nan')))
+    cv_safe = _safe_float(computed_stats.get('cv', float('nan')))
+    skewness_safe = _safe_float(computed_stats.get('skewness', float('nan')))
+    kurtosis_safe = _safe_float(computed_stats.get('kurtosis', float('nan')))
+    r2_safe = _safe_float(r2)
+    
     pretty_stats_text = (
-        f"μ = {mu:.6g}\n"
-        f"σ = {sigma:.6g}\n"
-        f"Mediana = {computed_stats.get('median', float('nan')):.6g}\n"
-        f"Moda = {computed_stats.get('mode', float('nan')):.6g}\n"
-        f"Soma freq = {computed_stats.get('total_freq', float('nan')):.6g}\n"
-        f"CV = {computed_stats.get('cv', float('nan')):.6g}\n"
-        f"Skewness = {computed_stats.get('skewness', float('nan')):.6g}\n"
-        f"Kurtosis = {computed_stats.get('kurtosis', float('nan')):.6g}\n"
-        f"R² = {r2:.5g}\n"
+        f"μ = {mu_safe:.6g}\n"
+        f"σ = {sigma_safe:.6g}\n"
+        f"Mediana = {median_safe:.6g}\n"
+        f"Moda = {mode_safe:.6g}\n"
+        f"Soma freq = {total_freq_safe:.6g}\n"
+        f"CV = {cv_safe:.6g}\n"
+        f"Skewness = {skewness_safe:.6g}\n"
+        f"Kurtosis = {kurtosis_safe:.6g}\n"
+        f"R² = {r2_safe:.5g}\n"
         f"Método freq = {computed_stats.get('freq_method')}"
     )
     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
@@ -826,7 +888,13 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
             plt.savefig(out_png, dpi=220, bbox_inches='tight')
             print("Gráfico detalhado salvo em:", out_png)
         if mostrar:
+            # Trocar temporariamente para backend com GUI
+            current_backend = matplotlib.get_backend()
+            if current_backend == 'agg':
+                plt.switch_backend('TkAgg')
             plt.show()
+            if current_backend == 'agg':
+                matplotlib.use('Agg')
     finally:
         plt.close(fig)
 
@@ -1031,7 +1099,13 @@ def criar_grafico_comparativo(excel_paths: List[Path], outdir: Path, mostrar: bo
         plt.savefig(out_png, dpi=220, bbox_inches='tight')
         print("Gráfico comparativo salvo em:", out_png)
         if mostrar:
+            # Trocar temporariamente para backend com GUI
+            current_backend = matplotlib.get_backend()
+            if current_backend == 'agg':
+                plt.switch_backend('TkAgg')
             plt.show()
+            if current_backend == 'agg':
+                matplotlib.use('Agg')
     finally:
         plt.close(fig)
     return out_png
@@ -1260,15 +1334,37 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
     ax.legend(loc='best', fontsize=10, framealpha=0.9)
     
     # Estatísticas na caixa de texto
+    # Converter valores para float escalar seguro
+    def _to_scalar(val):
+        # Se for array/Series, pegar primeiro elemento
+        if hasattr(val, '__len__') and not isinstance(val, str):
+            try:
+                if len(val) > 0:
+                    val = val[0] if hasattr(val, '__getitem__') else float(val)
+                else:
+                    return float('nan')
+            except (TypeError, IndexError):
+                pass
+        # Se tiver método .item() (numpy scalar)
+        if hasattr(val, 'item'):
+            try:
+                return val.item()
+            except (ValueError, TypeError):
+                pass
+        return float(val)
+    
+    time_min = _to_scalar(df['Time'].min())
+    time_max = _to_scalar(df['Time'].max())
+    
     stats_text = f"📊 Estatísticas:\n"
     stats_text += f"• Pontos: {len(df)}\n"
-    stats_text += f"• Tempo: {df['Time'].min():.6f}s a {df['Time'].max():.6f}s\n"
+    stats_text += f"• Tempo: {time_min:.6f}s a {time_max:.6f}s\n"
     stats_text += f"• Variáveis: {len(var_cols)}\n"
     
     for var in var_cols:
-        vmin = df[var].min()
-        vmax = df[var].max()
-        vmean = df[var].mean()
+        vmin = _to_scalar(df[var].min())
+        vmax = _to_scalar(df[var].max())
+        vmean = _to_scalar(df[var].mean())
         stats_text += f"• {var}: min={vmin:.3f}, max={vmax:.3f}, μ={vmean:.3f}\n"
     
     bbox_props = dict(boxstyle="round,pad=0.8", fc="white", ec="0.4", alpha=0.95)
@@ -1286,7 +1382,13 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
     
     # Mostrar
     if mostrar:
+        # Trocar temporariamente para backend com GUI
+        current_backend = matplotlib.get_backend()
+        if current_backend == 'agg':
+            plt.switch_backend('TkAgg')
         plt.show()
+        if current_backend == 'agg':
+            matplotlib.use('Agg')
     else:
         plt.close(fig)
     

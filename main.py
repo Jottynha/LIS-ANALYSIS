@@ -21,7 +21,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # Configurar matplotlib para usar backend não-GUI por padrão (evita warnings em threads)
 # O backend será alterado para TkAgg apenas quando mostrar=True
-matplotlib.use('Agg')
+# IMPORTANTE: Não forçar backend aqui para permitir que GUI funcione
+# matplotlib.use('Agg')  # COMENTADO para evitar conflito com customtkinter
 
 # ------------------ Configurações e regex ------------------
 START_MARKER = "The following is a distribution of peak overvoltages"

@@ -6,6 +6,11 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+# IMPORTANTE: Configurar matplotlib ANTES de importar customtkinter
+import matplotlib
+matplotlib.use('TkAgg')  # Backend com GUI para evitar conflito com customtkinter
+
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkinter as tk
@@ -118,7 +123,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.start_idx_var = tk.IntVar(value=start_index)
         self.filter_var = tk.StringVar()
         self.filetype_var = tk.StringVar(value='.lis')
-        self.status_var = tk.StringVar(value='✓ Pronto')
+        self.status_var = tk.StringVar(value='Pronto')
         self.progress_var = tk.DoubleVar(value=0)
         self.total_var = tk.IntVar(value=0)
         self.cancel_event = threading.Event()
@@ -210,11 +215,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.tabview = ctk.CTkTabview(self, width=1150, height=650)
         self.tabview.pack(pady=20, padx=20, fill="both", expand=True)
         
-        # Criar abas
-        self.tabview.add("📁 Configurações")
-        self.tabview.add("📊 Análise .lis")
-        self.tabview.add("⚡ Simulação ATP")
-        self.tabview.add("📝 Logs")
+        # Criar abas (SEM EMOJIS para evitar segfault em alguns sistemas)
+        self.tabview.add("Configuracoes")
+        self.tabview.add("Analise .lis")
+        self.tabview.add("Simulacao ATP")
+        self.tabview.add("Logs")
         
         # Popular cada aba
         self._build_config_tab()
@@ -233,7 +238,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Título
         title_label = ctk.CTkLabel(
             header, 
-            text="⚡ LIS Analysis",
+            text="LIS Analysis",
             font=ctk.CTkFont(size=24, weight="bold")
         )
         title_label.pack(side="left", padx=10)
@@ -260,7 +265,7 @@ class ModernLisAnalysisApp(ctk.CTk):
     
     def _build_config_tab(self):
         """Aba de Configurações"""
-        tab = self.tabview.tab("📁 Configurações")
+        tab = self.tabview.tab("Configuracoes")
         
         # Frame scrollable
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
@@ -272,7 +277,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             dir_card, 
-            text="📂 Diretórios",
+            text="Diretórios",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -286,7 +291,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             folder_frame, 
-            text="📁 Escolher", 
+            text="Escolher", 
             command=self._choose_folder,
             width=120
         ).pack(side="left")
@@ -301,7 +306,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             outdir_frame, 
-            text="📁 Escolher", 
+            text="Escolher", 
             command=self._choose_outdir,
             width=120
         ).pack(side="left")
@@ -312,7 +317,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             options_card, 
-            text="⚙️ Opções de Processamento",
+            text="Opções de Processamento",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -324,19 +329,19 @@ class ModernLisAnalysisApp(ctk.CTk):
         col1 = ctk.CTkFrame(checks_frame, fg_color="transparent")
         col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
         
-        ctk.CTkCheckBox(col1, text="📊 Mostrar gráficos", variable=self.show_plots_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col1, text="📁 Abrir pasta de saída", variable=self.open_output_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col1, text="📈 Só gráfico comparativo", variable=self.only_comparative_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col1, text="💾 Salvar logs", variable=self.save_logs_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col1, text="Mostrar gráficos", variable=self.show_plots_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col1, text="Abrir pasta de saída", variable=self.open_output_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col1, text="Só gráfico comparativo", variable=self.only_comparative_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col1, text="Salvar logs", variable=self.save_logs_var).pack(anchor="w", pady=5)
         
         # Coluna 2
         col2 = ctk.CTkFrame(checks_frame, fg_color="transparent")
         col2.pack(side="left", fill="both", expand=True)
         
-        ctk.CTkCheckBox(col2, text="♻️ Sobrescrever arquivos", variable=self.overwrite_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col2, text="🔇 Ocultar erros individuais", variable=self.hide_errors_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col2, text="⚡ Processar em paralelo", variable=self.parallel_process_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col2, text="📂 Auto-organizar arquivos", variable=self.auto_organize_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col2, text="Sobrescrever arquivos", variable=self.overwrite_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col2, text="Ocultar erros individuais", variable=self.hide_errors_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col2, text="Processar em paralelo", variable=self.parallel_process_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col2, text="Auto-organizar arquivos", variable=self.auto_organize_var).pack(anchor="w", pady=5)
         
         # Card: Índice Inicial
         index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
@@ -344,7 +349,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             index_card, 
-            text="🔢 Configurações Avançadas",
+            text="Configurações Avançadas",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -355,8 +360,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkEntry(index_frame, textvariable=self.start_idx_var, width=80).pack(side="left")
     
     def _build_analysis_tab(self):
-        """Aba de Análise de arquivos .lis"""
-        tab = self.tabview.tab("📊 Análise .lis")
+        """Aba de Análise de Arquivos .lis"""
+        tab = self.tabview.tab("Analise .lis")
         
         # Frame superior: filtros e botões
         top_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -366,14 +371,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         filter_frame = ctk.CTkFrame(top_frame, fg_color="transparent")
         filter_frame.pack(side="left", fill="x", expand=True)
         
-        ctk.CTkLabel(filter_frame, text="🔍 Filtro:").pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(filter_frame, text="Filtro:").pack(side="left", padx=(0, 10))
         filter_entry = ctk.CTkEntry(filter_frame, textvariable=self.filter_var, width=300)
         filter_entry.pack(side="left", fill="x", expand=True)
         filter_entry.bind('<KeyRelease>', lambda e: self.refresh_list())
         
         ctk.CTkButton(
             filter_frame, 
-            text="✕ Limpar", 
+            text="Limpar", 
             command=self._clear_filter,
             width=80,
             fg_color="gray"
@@ -385,14 +390,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             action_frame, 
-            text="🔄 Atualizar", 
+            text="Atualizar", 
             command=self.refresh_list,
             width=120
         ).pack(side="left", padx=5)
         
         ctk.CTkButton(
             action_frame, 
-            text="▶️ Processar Selecionados", 
+            text="Processar Selecionados", 
             command=self._process_selected,
             width=180,
             fg_color="#4CAF50",
@@ -409,7 +414,7 @@ class ModernLisAnalysisApp(ctk.CTk):
     
     def _build_simulation_tab(self):
         """Aba de Simulação ATP"""
-        tab = self.tabview.tab("⚡ Simulação ATP")
+        tab = self.tabview.tab("Simulacao ATP")
         
         # Frame scrollable
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
@@ -421,7 +426,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             exec_card, 
-            text="⚙️ Executável ATP",
+            text="Executável ATP",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -434,7 +439,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             exec_frame, 
-            text="📁 Escolher", 
+            text="Escolher", 
             command=self._choose_atp_executable,
             width=120
         ).pack(side="left")
@@ -445,7 +450,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             acp_card, 
-            text="📄 Arquivo .acp",
+            text="Arquivo .acp",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -458,7 +463,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             acp_frame, 
-            text="📁 Escolher", 
+            text="Escolher", 
             command=self._choose_acp_file,
             width=120
         ).pack(side="left")
@@ -469,7 +474,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(
             action_card, 
-            text="🚀 Executar Simulação",
+            text="Executar Simulação",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
@@ -478,7 +483,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             buttons_frame, 
-            text="▶️ Executar ATP", 
+            text="Executar ATP", 
             command=self._run_atp_simulation,
             width=200,
             height=40,
@@ -489,7 +494,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             buttons_frame, 
-            text="🔍 Detectar Parâmetros", 
+            text="Detectar Parâmetros", 
             command=self._detect_parameters,
             width=200,
             height=40,
@@ -501,12 +506,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Área de resultados
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=200)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
-        self.simulation_results.insert("1.0", "📋 Resultados da simulação aparecerão aqui...\n")
+        self.simulation_results.insert("1.0", "Resultados da simulação aparecerão aqui...\n")
         self.simulation_results.configure(state="disabled")
     
     def _build_logs_tab(self):
         """Aba de Logs"""
-        tab = self.tabview.tab("📝 Logs")
+        tab = self.tabview.tab("Logs")
         
         # Toolbar
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
@@ -514,7 +519,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             toolbar, 
-            text="🗑️ Limpar Logs", 
+            text="Limpar Logs", 
             command=self._clear_logs,
             width=120,
             fg_color="#f44336",
@@ -523,7 +528,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             toolbar, 
-            text="💾 Salvar Logs", 
+            text="Salvar Logs", 
             command=self._save_logs_to_file,
             width=120
         ).pack(side="left", padx=10)
@@ -533,9 +538,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
         # Log inicial
-        self.log("✓ Interface inicializada com sucesso")
-        self.log(f"📂 Pasta de entrada: {self.folder_var.get()}")
-        self.log(f"📁 Pasta de saída: {self.outdir_var.get()}")
+        self.log("Interface inicializada com sucesso")
+        self.log(f"Pasta de entrada: {self.folder_var.get()}")
+        self.log(f"Pasta de saída: {self.outdir_var.get()}")
     
     def _build_status_bar(self):
         """Barra de status inferior"""
@@ -558,7 +563,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Botão de cancelar (oculto inicialmente)
         self.cancel_btn = ctk.CTkButton(
             status_frame, 
-            text="⏹️ Cancelar", 
+            text="Cancelar", 
             command=self._cancel_processing,
             width=100,
             fg_color="#f44336",
@@ -610,14 +615,14 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _cancel_processing(self):
         """Cancelar processamento em andamento"""
         self.cancel_event.set()
-        self.log("⚠️ Cancelamento solicitado...")
+        self.log("Cancelamento solicitado...")
     
     def _clear_logs(self):
         """Limpar área de logs"""
         self.log_textbox.configure(state="normal")
         self.log_textbox.delete("1.0", "end")
         self.log_textbox.configure(state="disabled")
-        self.log("📝 Logs limpos")
+        self.log("Logs limpos")
     
     def _save_logs_to_file(self):
         """Salvar logs em arquivo"""
@@ -647,7 +652,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         """Atualiza lista de arquivos .lis"""
         folder = Path(self.folder_var.get())
         if not folder.exists():
-            self.log(f"⚠️ Pasta não encontrada: {folder}")
+            self.log(f"Pasta não encontrada: {folder}")
             return
         
         # Escanear arquivos
@@ -657,7 +662,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             files = [f for f in files if filter_text in f.name.lower()]
         
         self._files_cache = files
-        self.log(f"📁 {len(files)} arquivo(s) .lis encontrado(s)")
+        self.log(f"{len(files)} arquivo(s) .lis encontrado(s)")
         
         # Limpar lista anterior
         for widget in self.files_scroll_frame.winfo_children():
@@ -669,7 +674,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         if not files:
             no_files_label = ctk.CTkLabel(
                 self.files_scroll_frame,
-                text="📭 Nenhum arquivo .lis encontrado nesta pasta",
+                text="Nenhum arquivo .lis encontrado nesta pasta",
                 font=ctk.CTkFont(size=14),
                 text_color="gray"
             )
@@ -708,7 +713,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Nome do arquivo
         name_label = ctk.CTkLabel(
             info_frame,
-            text=f"📄 {file_path.name}",
+            text=f"{file_path.name}",
             font=ctk.CTkFont(size=13, weight="bold"),
             anchor="w"
         )
@@ -718,9 +723,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         try:
             file_size = _fmt_size(file_path.stat().st_size)
             file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime).strftime("%d/%m/%Y %H:%M")
-            details = f"📊 {file_size}  •  🕒 {file_mtime}"
+            details = f"{file_size}  •  {file_mtime}"
         except Exception:
-            details = "📊 Tamanho desconhecido"
+            details = "Tamanho desconhecido"
         
         details_label = ctk.CTkLabel(
             info_frame,
@@ -737,7 +742,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         open_btn = ctk.CTkButton(
             btn_frame,
-            text="👁️ Abrir",
+            text="Abrir",
             width=80,
             height=28,
             command=lambda: self._open_file_in_editor(file_path)
@@ -772,8 +777,8 @@ class ModernLisAnalysisApp(ctk.CTk):
             messagebox.showwarning("Aviso", "Nenhum arquivo selecionado.\n\nMarque os arquivos que deseja processar.")
             return
         
-        self.log(f"▶️ Iniciando processamento de {len(selected_files)} arquivo(s)...")
-        self.status_var.set(f"⏳ Processando {len(selected_files)} arquivo(s)...")
+        self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
+        self.status_var.set(f"Processando {len(selected_files)} arquivo(s)...")
         
         # Mostrar botão de cancelar
         self.cancel_btn.pack(side="right", padx=15)
@@ -786,20 +791,20 @@ class ModernLisAnalysisApp(ctk.CTk):
                 total = len(selected_files)
                 for idx, lis_path in enumerate(selected_files, start=self.start_idx_var.get()):
                     if self.cancel_event.is_set():
-                        self.log("⚠️ Processamento cancelado pelo usuário")
+                        self.log("Processamento cancelado pelo usuário")
                         break
                     
                     # Atualizar progresso
                     progress = (idx - self.start_idx_var.get() + 1) / total
                     self.progress_bar.set(progress)
-                    self.status_var.set(f"⏳ Processando {lis_path.name}... ({idx - self.start_idx_var.get() + 1}/{total})")
+                    self.status_var.set(f"Processando {lis_path.name}... ({idx - self.start_idx_var.get() + 1}/{total})")
                     
-                    self.log(f"📊 Processando: {lis_path.name}")
+                    self.log(f"Processando: {lis_path.name}")
                     
                     # Parse do .lis
                     df, stats_lines, summary = parse_lis_table(lis_path)
                     if df is None:
-                        self.log(f"⚠️ Tabela não encontrada em: {lis_path.name}")
+                        self.log(f"Tabela não encontrada em: {lis_path.name}")
                         continue
                     
                     # Salvar Excel
@@ -811,7 +816,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         computed_stats = calcular_estatisticas_do_df(df)
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
                     except Exception as e:
-                        self.log(f"⚠️ Erro ao calcular estatísticas: {e}")
+                        self.log(f"Erro ao calcular estatísticas: {e}")
                     
                     # Gráfico
                     if self.show_plots_var.get() or not self.only_comparative_var.get():
@@ -823,12 +828,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                         save_time_series_to_excel(time_series_df, excel_path)
                         criar_grafico_series_temporais(time_series_df, outdir / f"series_temporais_{idx}.png", lis_name=lis_path.name)
                     
-                    self.log(f"✓ Concluído: {lis_path.name}")
+                    self.log(f"Concluído: {lis_path.name}")
                 
                 # Finalizar
                 self.progress_bar.set(1.0)
-                self.status_var.set(f"✓ Processamento concluído! {len(selected_files)} arquivo(s)")
-                self.log(f"✅ Processamento finalizado com sucesso")
+                self.status_var.set(f"Processamento concluído! {len(selected_files)} arquivo(s)")
+                self.log(f"Processamento finalizado com sucesso")
                 
                 if self.open_output_var.get():
                     _open_in_file_manager(outdir)
@@ -836,14 +841,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 messagebox.showinfo("Sucesso", f"Processamento concluído!\n\n{len(selected_files)} arquivo(s) processado(s)\nResultados em: {outdir}")
                 
             except Exception as e:
-                self.log(f"✗ Erro durante processamento: {e}")
+                self.log(f"Erro durante processamento: {e}")
                 messagebox.showerror("Erro", f"Erro durante processamento:\n{str(e)}")
             finally:
                 self.cancel_btn.pack_forget()
                 self.cancel_event.clear()
                 self.progress_bar.set(0)
                 if not self.cancel_event.is_set():
-                    self.status_var.set("✓ Pronto")
+                    self.status_var.set("Pronto")
         
         threading.Thread(target=worker, daemon=True).start()
     
@@ -860,7 +865,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             messagebox.showerror("Erro", "Arquivo .acp não encontrado")
             return
         
-        self.log("⚡ Iniciando simulação ATP...")
+        self.log("Iniciando simulação ATP...")
         
         def worker():
             try:
@@ -868,14 +873,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 result = runner.run_simulation(Path(acp_file))
                 
                 if result:
-                    self.log(f"✓ Simulação concluída: {result}")
-                    self._update_simulation_results(f"✓ Sucesso!\nArquivo .lis gerado: {result}")
+                    self.log(f"Simulação concluída: {result}")
+                    self._update_simulation_results(f"Sucesso!\nArquivo .lis gerado: {result}")
                 else:
-                    self.log("✗ Simulação falhou")
-                    self._update_simulation_results("✗ Falha na simulação. Verifique os logs.")
+                    self.log("Simulação falhou")
+                    self._update_simulation_results("Falha na simulação. Verifique os logs.")
             except Exception as e:
-                self.log(f"✗ Erro: {e}")
-                self._update_simulation_results(f"✗ Erro:\n{str(e)}")
+                self.log(f"Erro: {e}")
+                self._update_simulation_results(f"Erro:\n{str(e)}")
         
         threading.Thread(target=worker, daemon=True).start()
     
@@ -887,24 +892,24 @@ class ModernLisAnalysisApp(ctk.CTk):
             messagebox.showerror("Erro", "Arquivo .acp não encontrado")
             return
         
-        self.log("🔍 Detectando parâmetros...")
+        self.log("Detectando parâmetros...")
         
         try:
             parser = AcpParser(Path(acp_file))
             parser.extract_atp_from_acp()
             params = parser.find_control_parameters()
             
-            result_text = "📊 Parâmetros detectados:\n\n"
+            result_text = "Parâmetros detectados:\n\n"
             result_text += f"• RPI values: {len(params.get('rpi_values', []))}\n"
             result_text += f"• Switch times: {len(params.get('switch_times', []))}\n"
             result_text += f"• dt: {params.get('dt')}\n"
             result_text += f"• tmax: {params.get('tmax')}\n"
             
             self._update_simulation_results(result_text)
-            self.log("✓ Parâmetros detectados com sucesso")
+            self.log("Parâmetros detectados com sucesso")
         except Exception as e:
-            self.log(f"✗ Erro ao detectar parâmetros: {e}")
-            self._update_simulation_results(f"✗ Erro:\n{str(e)}")
+            self.log(f"Erro ao detectar parâmetros: {e}")
+            self._update_simulation_results(f"Erro:\n{str(e)}")
     
     def _update_simulation_results(self, text: str):
         """Atualiza área de resultados da simulação"""

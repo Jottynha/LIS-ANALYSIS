@@ -10,6 +10,8 @@ from pathlib import Path
 # IMPORTANTE: Configurar matplotlib ANTES de importar customtkinter
 import matplotlib
 matplotlib.use('TkAgg')  # Backend com GUI para evitar conflito com customtkinter
+import matplotlib.pyplot as plt
+import numpy as np
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -145,6 +147,13 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_executable_var = tk.StringVar(value='')
         self.acp_file_var = tk.StringVar(value='')
         
+        # Opções de visualização de gráficos
+        self.plot_bars_var = tk.BooleanVar(value=True)
+        self.plot_points_var = tk.BooleanVar(value=True)
+        self.plot_gaussian_var = tk.BooleanVar(value=True)
+        self.plot_cumulative_var = tk.BooleanVar(value=True)
+        self.plot_stats_box_var = tk.BooleanVar(value=True)
+        
         # Carregar preferências
         self._load_prefs()
         
@@ -174,6 +183,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.auto_organize_var.set(data.get('auto_organize', True))
                 self.atp_executable_var.set(data.get('atp_executable', ''))
                 
+                # Carregar opções de gráfico
+                self.plot_bars_var.set(data.get('plot_bars', True))
+                self.plot_points_var.set(data.get('plot_points', True))
+                self.plot_gaussian_var.set(data.get('plot_gaussian', True))
+                self.plot_cumulative_var.set(data.get('plot_cumulative', True))
+                self.plot_stats_box_var.set(data.get('plot_stats_box', True))
+                
                 # Carregar tema
                 appearance = data.get('appearance_mode', 'System')
                 ctk.set_appearance_mode(appearance)
@@ -195,6 +211,11 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'parallel_process': self.parallel_process_var.get(),
                 'auto_organize': self.auto_organize_var.get(),
                 'atp_executable': self.atp_executable_var.get(),
+                'plot_bars': self.plot_bars_var.get(),
+                'plot_points': self.plot_points_var.get(),
+                'plot_gaussian': self.plot_gaussian_var.get(),
+                'plot_cumulative': self.plot_cumulative_var.get(),
+                'plot_stats_box': self.plot_stats_box_var.get(),
                 'appearance_mode': ctk.get_appearance_mode(),
             }
             PREFS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -343,6 +364,38 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkCheckBox(col2, text="Processar em paralelo", variable=self.parallel_process_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(col2, text="Auto-organizar arquivos", variable=self.auto_organize_var).pack(anchor="w", pady=5)
         
+        # Card: Opções de Visualização de Gráficos
+        plot_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        plot_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            plot_card,
+            text="Opções de Visualização dos Gráficos",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+        
+        ctk.CTkLabel(
+            plot_card,
+            text="Selecione os elementos que devem aparecer nos gráficos:",
+            font=ctk.CTkFont(size=11)
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+        
+        plot_checks_frame = ctk.CTkFrame(plot_card, fg_color="transparent")
+        plot_checks_frame.pack(fill="x", padx=15, pady=(0, 15))
+        
+        plot_col1 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
+        plot_col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkCheckBox(plot_col1, text="Barras (histograma)", variable=self.plot_bars_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col1, text="Pontos (scatter)", variable=self.plot_points_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col1, text="Curva gaussiana", variable=self.plot_gaussian_var).pack(anchor="w", pady=5)
+        
+        plot_col2 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
+        plot_col2.pack(side="left", fill="both", expand=True)
+        
+        ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var).pack(anchor="w", pady=5)
+        
         # Card: Índice Inicial
         index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         index_card.pack(fill="x", pady=(0, 15))
@@ -358,6 +411,42 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(index_frame, text="Índice inicial:").pack(side="left", padx=(0, 10))
         ctk.CTkEntry(index_frame, textvariable=self.start_idx_var, width=80).pack(side="left")
+        
+        # Card: Opções de Visualização de Gráficos
+        plot_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        plot_card.pack(fill="x", pady=(0, 15))
+        
+        ctk.CTkLabel(
+            plot_card, 
+            text="Opções de Visualização de Gráficos",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+        
+        ctk.CTkLabel(
+            plot_card,
+            text="Selecione os elementos que deseja visualizar nos gráficos:",
+            font=ctk.CTkFont(size=11),
+            text_color="gray60"
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+        
+        # Grid de checkboxes de visualização
+        plot_checks_frame = ctk.CTkFrame(plot_card, fg_color="transparent")
+        plot_checks_frame.pack(fill="x", padx=15, pady=(0, 15))
+        
+        # Coluna 1
+        plot_col1 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
+        plot_col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        ctk.CTkCheckBox(plot_col1, text="Barras de frequência", variable=self.plot_bars_var, command=self._save_prefs).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col1, text="Pontos de dados", variable=self.plot_points_var, command=self._save_prefs).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col1, text="Curva Gaussiana", variable=self.plot_gaussian_var, command=self._save_prefs).pack(anchor="w", pady=5)
+        
+        # Coluna 2
+        plot_col2 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
+        plot_col2.pack(side="left", fill="both", expand=True)
+        
+        ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var, command=self._save_prefs).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var, command=self._save_prefs).pack(anchor="w", pady=5)
     
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
@@ -788,7 +877,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                 outdir = Path(self.outdir_var.get())
                 outdir.mkdir(parents=True, exist_ok=True)
                 
+                # Coletar opções de visualização
+                plot_options = {
+                    'show_bars': self.plot_bars_var.get(),
+                    'show_points': self.plot_points_var.get(),
+                    'show_gaussian': self.plot_gaussian_var.get(),
+                    'show_cumulative': self.plot_cumulative_var.get(),
+                    'show_stats_box': self.plot_stats_box_var.get(),
+                }
+                
+                excel_paths = []  # Armazenar paths dos Excel para comparativo
                 total = len(selected_files)
+                
                 for idx, lis_path in enumerate(selected_files, start=self.start_idx_var.get()):
                     if self.cancel_event.is_set():
                         self.log("Processamento cancelado pelo usuário")
@@ -810,6 +910,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     # Salvar Excel
                     excel_path = outdir / f"Resultados_Simulacao_{idx}.xlsx"
                     save_df_to_excel_only(df, excel_path)
+                    excel_paths.append(excel_path)  # Adicionar à lista para comparativo
                     
                     # Estatísticas
                     try:
@@ -818,9 +919,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                     except Exception as e:
                         self.log(f"Erro ao calcular estatísticas: {e}")
                     
-                    # Gráfico
-                    if self.show_plots_var.get() or not self.only_comparative_var.get():
-                        criar_grafico_a_partir_do_excel(excel_path, outdir, sim_index=idx, salvar_png=True, mostrar=self.show_plots_var.get())
+                    # Gráfico individual (se não for modo "só comparativo")
+                    if not self.only_comparative_var.get():
+                        self._criar_grafico_customizado(excel_path, outdir, idx, plot_options, mostrar=self.show_plots_var.get())
                     
                     # Séries temporais
                     time_series_df = parse_lis_time_series(lis_path)
@@ -829,6 +930,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                         criar_grafico_series_temporais(time_series_df, outdir / f"series_temporais_{idx}.png", lis_name=lis_path.name)
                     
                     self.log(f"Concluído: {lis_path.name}")
+                
+                # Gerar gráfico comparativo se múltiplos arquivos
+                if len(excel_paths) > 1 and not self.cancel_event.is_set():
+                    self.log(f"Gerando gráfico comparativo de {len(excel_paths)} arquivos...")
+                    self.status_var.set("Gerando gráfico comparativo...")
+                    self._criar_grafico_comparativo_customizado(excel_paths, outdir, plot_options, mostrar=self.show_plots_var.get())
+                    self.log("Gráfico comparativo gerado com sucesso")
                 
                 # Finalizar
                 self.progress_bar.set(1.0)
@@ -851,6 +959,256 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.status_var.set("Pronto")
         
         threading.Thread(target=worker, daemon=True).start()
+    
+    def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, sim_index: int, plot_options: dict, mostrar: bool = False):
+        """Cria gráfico individual com opções customizadas de visualização"""
+        try:
+            # Importar aqui para evitar circular import
+            from main import obter_xy_e_stats_de_excel
+            
+            res = obter_xy_e_stats_de_excel(excel_path)
+            if res is None:
+                self.log(f"Erro ao extrair dados de {excel_path.name}")
+                return
+            
+            x, y, mu, sigma = res
+            
+            # Criar figura
+            fig, ax = plt.subplots(figsize=(11, 7))
+            
+            # Barras de frequência
+            if plot_options.get('show_bars', True):
+                unique_x = np.unique(x)
+                if unique_x.size > 1:
+                    diffs = np.diff(unique_x)
+                    diffs_pos = diffs[diffs > 0]
+                    bin_width = float(np.median(diffs_pos)) if diffs_pos.size > 0 else (np.max(x) - np.min(x)) / max(1, len(unique_x))
+                else:
+                    bin_width = 0.1
+                bar_width = bin_width * 0.9
+                ax.bar(x, y, width=bar_width, alpha=0.35, label='Frequência (bins)', align='center', edgecolor='k', linewidth=0.3)
+            
+            # Pontos de dados
+            if plot_options.get('show_points', True):
+                ax.scatter(x, y, color='tab:blue', s=30, zorder=5, label='Pontos (x vs freq)')
+            
+            # Curva Gaussiana
+            if plot_options.get('show_gaussian', True) and sigma and np.isfinite(sigma) and sigma > 0:
+                x_smooth = np.linspace(np.min(x), np.max(x), 800)
+                pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
+                scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
+                y_smooth = pdf * scale_factor
+                ax.plot(x_smooth, y_smooth, color='tab:orange', linewidth=2.2, label='Ajuste Gaussiano')
+            
+            ax.set_xlabel('Tensão (pu)')
+            ax.set_ylabel('Frequência')
+            ax.grid(alpha=0.25)
+            ax.legend(loc='upper left')
+            
+            # Curva acumulada
+            ax2 = None
+            if plot_options.get('show_cumulative', True):
+                ax2 = ax.twinx()
+                total_weight = np.sum(y)
+                cumsum = np.cumsum(y)
+                cum_pct = (cumsum / total_weight) * 100.0
+                ax2.plot(x, cum_pct, color='tab:green', marker='o', linestyle='--', label='Acumulado (%)', markersize=4)
+                ax2.set_ylabel('Acumulado (%)')
+                ax2.set_ylim(0, 100)
+            
+            # Caixa de estatísticas
+            if plot_options.get('show_stats_box', True):
+                try:
+                    from main import calcular_estatisticas_do_df
+                    import pandas as pd
+                    df_excel = pd.read_excel(excel_path, sheet_name='Dados')
+                    computed_stats = calcular_estatisticas_do_df(df_excel)
+                    
+                    def _safe_float(val):
+                        if val is None:
+                            return float('nan')
+                        if hasattr(val, '__len__') and not isinstance(val, str):
+                            try:
+                                if len(val) > 0:
+                                    val = val[0] if hasattr(val, '__getitem__') else float(val)
+                                else:
+                                    return float('nan')
+                            except (TypeError, IndexError):
+                                pass
+                        if hasattr(val, 'item'):
+                            try:
+                                return val.item()
+                            except (ValueError, TypeError):
+                                pass
+                        try:
+                            return float(val)
+                        except (TypeError, ValueError):
+                            return float('nan')
+                    
+                    stats_text = (
+                        f"μ = {_safe_float(mu):.6g}\\n"
+                        f"σ = {_safe_float(sigma):.6g}\\n"
+                        f"Mediana = {_safe_float(computed_stats.get('median', float('nan'))):.6g}\\n"
+                        f"CV = {_safe_float(computed_stats.get('cv', float('nan'))):.6g}\\n"
+                        f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
+                    )
+                    
+                    bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
+                    ax.text(0.98, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+                            verticalalignment='top', horizontalalignment='right', bbox=bbox_props)
+                except Exception:
+                    pass
+            
+            ax.set_title(f"Análise Detalhada — {excel_path.stem}")
+            
+            # Combinar legendas
+            if ax2:
+                lines, labels = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax2.legend(lines + lines2, labels + labels2, loc='lower right')
+            
+            # Salvar
+            outdir = Path(outdir)
+            outdir.mkdir(parents=True, exist_ok=True)
+            out_png = outdir / f"grafico_{sim_index}.png"
+            
+            plt.tight_layout()
+            plt.savefig(out_png, dpi=220, bbox_inches='tight')
+            self.log(f"Gráfico salvo: {out_png.name}")
+            
+            if mostrar:
+                plt.show()
+            else:
+                plt.close(fig)
+                
+        except Exception as e:
+            self.log(f"Erro ao criar gráfico: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _criar_grafico_comparativo_customizado(self, excel_paths: list, outdir: Path, plot_options: dict, mostrar: bool = False):
+        """Cria gráfico comparativo com opções customizadas"""
+        try:
+            from main import obter_xy_e_stats_de_excel
+            
+            series_data = []
+            labels = []
+            
+            for excel_path in excel_paths:
+                res = obter_xy_e_stats_de_excel(excel_path)
+                if res is None:
+                    continue
+                x, y, mu, sigma = res
+                series_data.append((x, y, mu, sigma))
+                labels.append(excel_path.stem)
+            
+            if not series_data:
+                self.log("Sem dados para gráfico comparativo")
+                return
+            
+            # Criar figura
+            fig, ax = plt.subplots(figsize=(14, 8))
+            colors = plt.cm.tab10(range(len(series_data)))
+            
+            # Preparar eixo secundário se curva acumulada estiver habilitada
+            ax2 = None
+            if plot_options.get('show_cumulative', True):
+                ax2 = ax.twinx()
+                ax2.set_ylabel('Acumulado (%)', fontsize=12, fontweight='bold')
+                ax2.set_ylim(0, 100)
+            
+            for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
+                color = colors[idx]
+                
+                # Barras (histograma) - com transparência para não sobrepor muito
+                if plot_options.get('show_bars', True):
+                    unique_x = np.unique(x)
+                    if unique_x.size > 1:
+                        diffs = np.diff(unique_x)
+                        diffs_pos = diffs[diffs > 0]
+                        bin_width = float(np.median(diffs_pos)) if diffs_pos.size > 0 else (np.max(x) - np.min(x)) / max(1, len(unique_x))
+                    else:
+                        bin_width = 0.1
+                    bar_width = bin_width * 0.7  # Mais estreito no comparativo
+                    # Offset para não sobrepor barras de diferentes séries
+                    offset = (idx - len(series_data)/2) * bar_width * 0.3
+                    ax.bar(x + offset, y, width=bar_width*0.8, alpha=0.25, color=color, 
+                           label=f"{label} (barras)", align='center', edgecolor=color, linewidth=0.5)
+                
+                # Pontos
+                if plot_options.get('show_points', True):
+                    ax.scatter(x, y, s=25, alpha=0.6, color=color, label=f"{label} (pontos)", marker='o', edgecolors='white', linewidths=0.5)
+                
+                # Curva gaussiana
+                if plot_options.get('show_gaussian', True) and sigma and np.isfinite(sigma) and sigma > 0:
+                    x_smooth = np.linspace(np.min(x), np.max(x), 800)
+                    pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
+                    scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
+                    y_smooth = pdf * scale_factor
+                    ax.plot(x_smooth, y_smooth, linewidth=2.5, color=color, label=f"{label} (gaussiana)", linestyle='-', alpha=0.9)
+                
+                # Curva acumulada
+                if plot_options.get('show_cumulative', True) and ax2:
+                    total_weight = np.sum(y)
+                    cumsum = np.cumsum(y)
+                    cum_pct = (cumsum / total_weight) * 100.0
+                    ax2.plot(x, cum_pct, color=color, marker='d', linestyle=':', 
+                            label=f"{label} (acum.)", markersize=3, linewidth=1.5, alpha=0.7)
+            
+            ax.set_xlabel('Tensão (pu)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Frequência', fontsize=12, fontweight='bold')
+            ax.grid(alpha=0.3, linestyle='--')
+            ax.set_title('Gráfico Comparativo - Distribuição e Ajuste Gaussiano', fontsize=14, fontweight='bold', pad=15)
+            
+            # Combinar legendas dos dois eixos
+            if ax2:
+                lines1, labels1 = ax.get_legend_handles_labels()
+                lines2, labels2 = ax2.get_legend_handles_labels()
+                ax.legend(lines1 + lines2, labels1 + labels2, ncol=2, fontsize=8, loc='best', framealpha=0.95)
+            else:
+                ax.legend(ncol=2, fontsize=9, loc='best', framealpha=0.9)
+            
+            # Caixa de estatísticas resumida
+            if plot_options.get('show_stats_box', True):
+                stats_text = f"Comparativo de {len(series_data)} arquivos:\n"
+                for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
+                    def _safe_float(val):
+                        if val is None or (isinstance(val, float) and np.isnan(val)):
+                            return float('nan')
+                        if hasattr(val, 'item'):
+                            try:
+                                return val.item()
+                            except:
+                                pass
+                        return float(val)
+                    
+                    mu_val = _safe_float(mu)
+                    sigma_val = _safe_float(sigma)
+                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
+                
+                bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=8,
+                       verticalalignment='top', horizontalalignment='left', 
+                       bbox=bbox_props, family='monospace')
+            
+            # Salvar
+            outdir = Path(outdir)
+            outdir.mkdir(parents=True, exist_ok=True)
+            out_png = outdir / "grafico_comparativo.png"
+            
+            plt.tight_layout()
+            plt.savefig(out_png, dpi=220, bbox_inches='tight')
+            self.log(f"Gráfico comparativo salvo: {out_png.name}")
+            
+            if mostrar:
+                plt.show()
+            else:
+                plt.close(fig)
+                
+        except Exception as e:
+            self.log(f"Erro ao criar gráfico comparativo: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _run_atp_simulation(self):
         """Executar simulação ATP"""

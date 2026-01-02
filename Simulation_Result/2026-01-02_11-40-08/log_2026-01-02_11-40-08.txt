@@ -1,0 +1,20 @@
+[11:39:47] Interface inicializada com sucesso
+[11:39:47] Pasta de entrada: /home/joao/Projetos/6º Periodo/Eletrônica/LIS-ANALYSIS/Listas ATP/CONVENCIONAL
+[11:39:47] Pasta de saída: /home/joao/Projetos/6º Periodo/Eletrônica/LIS-ANALYSIS/Simulation_Result
+[11:39:47] 11 arquivo(s) .lis encontrado(s)
+[11:40:00] Pasta de saída limpa: 14 arquivo(s), 0 pasta(s) excluída(s)
+[11:40:08] Iniciando processamento de 3 arquivo(s)...
+[11:40:08] Criada pasta de saída: 2026-01-02_11-40-08
+[11:40:08] Processando: Caso0_ReEnergizacao_Convenc_RPI=1000 e RF=30.lis
+[11:40:10] Gráfico salvo: grafico_Caso0_ReEnergizacao_Convenc_RPI=1000 e RF=30.png
+[11:40:18] Concluído: Caso0_ReEnergizacao_Convenc_RPI=1000 e RF=30.lis
+[11:40:18] Processando: Caso0_ReEnergizacao_Convenc_RPI=800 e RF=30.lis
+[11:40:19] Gráfico salvo: grafico_Caso0_ReEnergizacao_Convenc_RPI=800 e RF=30.png
+[11:40:26] Concluído: Caso0_ReEnergizacao_Convenc_RPI=800 e RF=30.lis
+[11:40:26] Processando: Caso0_ReEnergizacao_Convenc_RPI=600 e RF=30.lis
+[11:40:27] Gráfico salvo: grafico_Caso0_ReEnergizacao_Convenc_RPI=600 e RF=30.png
+[11:40:35] Concluído: Caso0_ReEnergizacao_Convenc_RPI=600 e RF=30.lis
+[11:40:35] Gerando gráfico comparativo de 3 arquivos...
+[11:40:36] Gráfico comparativo salvo: comparativo_2026-01-02_11-40-08.png
+[11:40:36] Gráfico comparativo gerado com sucesso
+

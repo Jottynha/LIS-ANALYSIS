@@ -479,6 +479,15 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             action_frame, 
+            text="Limpar Pasta Saida", 
+            command=self._clear_output_folder,
+            width=140,
+            fg_color="#FF5722",
+            hover_color="#E64A19"
+        ).pack(side="left", padx=5)
+        
+        ctk.CTkButton(
+            action_frame, 
             text="Atualizar", 
             command=self.refresh_list,
             width=120
@@ -701,6 +710,57 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.filter_var.set('')
         self.refresh_list()
     
+    def _clear_output_folder(self):
+        """Limpar todos os arquivos da pasta de saída"""
+        outdir = Path(self.outdir_var.get())
+        
+        if not outdir.exists():
+            messagebox.showinfo("Informação", f"A pasta de saída não existe:\n{outdir}")
+            return
+        
+        # Contar arquivos
+        all_files = list(outdir.rglob('*'))
+        files_count = sum(1 for f in all_files if f.is_file())
+        dirs_count = sum(1 for f in all_files if f.is_dir())
+        
+        if files_count == 0 and dirs_count == 0:
+            messagebox.showinfo("Informação", "A pasta de saída já está vazia.")
+            return
+        
+        # Confirmação
+        msg = f"Deseja EXCLUIR todos os arquivos da pasta de saída?\n\n"
+        msg += f"Pasta: {outdir}\n"
+        msg += f"Arquivos: {files_count}\n"
+        msg += f"Subpastas: {dirs_count}\n\n"
+        msg += "Esta ação NÃO PODE ser desfeita!"
+        
+        if not messagebox.askyesno("Confirmar Exclusão", msg, icon='warning'):
+            return
+        
+        # Executar limpeza
+        try:
+            import shutil
+            deleted_files = 0
+            deleted_dirs = 0
+            
+            for item in outdir.iterdir():
+                try:
+                    if item.is_file():
+                        item.unlink()
+                        deleted_files += 1
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        deleted_dirs += 1
+                except Exception as e:
+                    self.log(f"Erro ao excluir {item.name}: {e}")
+            
+            self.log(f"Pasta de saída limpa: {deleted_files} arquivo(s), {deleted_dirs} pasta(s) excluída(s)")
+            messagebox.showinfo("Sucesso", f"Pasta limpa com sucesso!\n\n{deleted_files} arquivo(s)\n{deleted_dirs} pasta(s)")
+            
+        except Exception as e:
+            self.log(f"Erro ao limpar pasta: {e}")
+            messagebox.showerror("Erro", f"Erro ao limpar pasta:\n{str(e)}")
+    
     def _cancel_processing(self):
         """Cancelar processamento em andamento"""
         self.cancel_event.set()
@@ -874,8 +934,15 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         def worker():
             try:
-                outdir = Path(self.outdir_var.get())
+                base_outdir = Path(self.outdir_var.get())
+                base_outdir.mkdir(parents=True, exist_ok=True)
+                
+                # Criar subpasta com data e hora
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                outdir = base_outdir / timestamp
                 outdir.mkdir(parents=True, exist_ok=True)
+                
+                self.log(f"Criada pasta de saída: {outdir.name}")
                 
                 # Coletar opções de visualização
                 plot_options = {
@@ -889,15 +956,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                 excel_paths = []  # Armazenar paths dos Excel para comparativo
                 total = len(selected_files)
                 
-                for idx, lis_path in enumerate(selected_files, start=self.start_idx_var.get()):
+                for idx, lis_path in enumerate(selected_files, start=1):
                     if self.cancel_event.is_set():
                         self.log("Processamento cancelado pelo usuário")
                         break
                     
                     # Atualizar progresso
-                    progress = (idx - self.start_idx_var.get() + 1) / total
+                    progress = idx / total
                     self.progress_bar.set(progress)
-                    self.status_var.set(f"Processando {lis_path.name}... ({idx - self.start_idx_var.get() + 1}/{total})")
+                    self.status_var.set(f"Processando {lis_path.name}... ({idx}/{total})")
                     
                     self.log(f"Processando: {lis_path.name}")
                     
@@ -907,8 +974,11 @@ class ModernLisAnalysisApp(ctk.CTk):
                         self.log(f"Tabela não encontrada em: {lis_path.name}")
                         continue
                     
-                    # Salvar Excel
-                    excel_path = outdir / f"Resultados_Simulacao_{idx}.xlsx"
+                    # Nome base do arquivo (sem extensão)
+                    base_name = lis_path.stem
+                    
+                    # Salvar Excel com nome do arquivo .lis
+                    excel_path = outdir / f"{base_name}.xlsx"
                     save_df_to_excel_only(df, excel_path)
                     excel_paths.append(excel_path)  # Adicionar à lista para comparativo
                     
@@ -921,13 +991,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                     
                     # Gráfico individual (se não for modo "só comparativo")
                     if not self.only_comparative_var.get():
-                        self._criar_grafico_customizado(excel_path, outdir, idx, plot_options, mostrar=self.show_plots_var.get())
+                        graph_name = f"grafico_{base_name}.png"
+                        self._criar_grafico_customizado(excel_path, outdir, graph_name, plot_options, mostrar=self.show_plots_var.get())
                     
                     # Séries temporais
                     time_series_df = parse_lis_time_series(lis_path)
                     if time_series_df is not None:
                         save_time_series_to_excel(time_series_df, excel_path)
-                        criar_grafico_series_temporais(time_series_df, outdir / f"series_temporais_{idx}.png", lis_name=lis_path.name)
+                        series_name = f"series_temporais_{base_name}.png"
+                        criar_grafico_series_temporais(time_series_df, outdir / series_name, lis_name=lis_path.name)
                     
                     self.log(f"Concluído: {lis_path.name}")
                 
@@ -935,18 +1007,26 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if len(excel_paths) > 1 and not self.cancel_event.is_set():
                     self.log(f"Gerando gráfico comparativo de {len(excel_paths)} arquivos...")
                     self.status_var.set("Gerando gráfico comparativo...")
-                    self._criar_grafico_comparativo_customizado(excel_paths, outdir, plot_options, mostrar=self.show_plots_var.get())
+                    comp_name = f"comparativo_{timestamp}.png"
+                    self._criar_grafico_comparativo_customizado(excel_paths, outdir, comp_name, plot_options, mostrar=self.show_plots_var.get())
                     self.log("Gráfico comparativo gerado com sucesso")
+                
+                # Salvar log se habilitado
+                if self.save_logs_var.get():
+                    log_content = self.log_textbox.get("1.0", "end")
+                    log_file = outdir / f"log_{timestamp}.txt"
+                    log_file.write_text(log_content, encoding='utf-8')
+                    self.log(f"Log salvo: {log_file.name}")
                 
                 # Finalizar
                 self.progress_bar.set(1.0)
                 self.status_var.set(f"Processamento concluído! {len(selected_files)} arquivo(s)")
-                self.log(f"Processamento finalizado com sucesso")
+                self.log(f"Processamento finalizado com sucesso em: {outdir.name}")
                 
                 if self.open_output_var.get():
                     _open_in_file_manager(outdir)
                 
-                messagebox.showinfo("Sucesso", f"Processamento concluído!\n\n{len(selected_files)} arquivo(s) processado(s)\nResultados em: {outdir}")
+                messagebox.showinfo("Sucesso", f"Processamento concluído!\n\n{len(selected_files)} arquivo(s) processado(s)\nResultados em:\n{outdir}")
                 
             except Exception as e:
                 self.log(f"Erro durante processamento: {e}")
@@ -960,7 +1040,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         threading.Thread(target=worker, daemon=True).start()
     
-    def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, sim_index: int, plot_options: dict, mostrar: bool = False):
+    def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico individual com opções customizadas de visualização"""
         try:
             # Importar aqui para evitar circular import
@@ -1075,7 +1155,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             # Salvar
             outdir = Path(outdir)
             outdir.mkdir(parents=True, exist_ok=True)
-            out_png = outdir / f"grafico_{sim_index}.png"
+            out_png = outdir / output_name
             
             plt.tight_layout()
             plt.savefig(out_png, dpi=220, bbox_inches='tight')
@@ -1091,7 +1171,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             import traceback
             traceback.print_exc()
     
-    def _criar_grafico_comparativo_customizado(self, excel_paths: list, outdir: Path, plot_options: dict, mostrar: bool = False):
+    def _criar_grafico_comparativo_customizado(self, excel_paths: list, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico comparativo com opções customizadas"""
         try:
             from main import obter_xy_e_stats_de_excel
@@ -1204,7 +1284,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             # Salvar
             outdir = Path(outdir)
             outdir.mkdir(parents=True, exist_ok=True)
-            out_png = outdir / "grafico_comparativo.png"
+            out_png = outdir / output_name
             
             plt.tight_layout()
             plt.savefig(out_png, dpi=220, bbox_inches='tight')

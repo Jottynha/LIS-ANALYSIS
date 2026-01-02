@@ -138,10 +138,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.open_output_var = tk.BooleanVar(value=True)
         self.only_comparative_var = tk.BooleanVar(value=False)
         self.save_logs_var = tk.BooleanVar(value=True)
-        self.overwrite_var = tk.BooleanVar(value=True)
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
-        self.auto_organize_var = tk.BooleanVar(value=True)
         
         # Variáveis ATP
         self.atp_executable_var = tk.StringVar(value='')
@@ -177,10 +175,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.open_output_var.set(data.get('open_output', True))
                 self.only_comparative_var.set(data.get('only_comparative', False))
                 self.save_logs_var.set(data.get('save_logs', True))
-                self.overwrite_var.set(data.get('overwrite', True))
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
-                self.auto_organize_var.set(data.get('auto_organize', True))
                 self.atp_executable_var.set(data.get('atp_executable', ''))
                 
                 # Carregar opções de gráfico
@@ -206,10 +202,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'open_output': self.open_output_var.get(),
                 'only_comparative': self.only_comparative_var.get(),
                 'save_logs': self.save_logs_var.get(),
-                'overwrite': self.overwrite_var.get(),
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
-                'auto_organize': self.auto_organize_var.get(),
                 'atp_executable': self.atp_executable_var.get(),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
@@ -359,10 +353,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         col2 = ctk.CTkFrame(checks_frame, fg_color="transparent")
         col2.pack(side="left", fill="both", expand=True)
         
-        ctk.CTkCheckBox(col2, text="Sobrescrever arquivos", variable=self.overwrite_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(col2, text="Ocultar erros individuais", variable=self.hide_errors_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col2, text="Processar em paralelo", variable=self.parallel_process_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col2, text="Auto-organizar arquivos", variable=self.auto_organize_var).pack(anchor="w", pady=5)
         
         # Card: Opções de Visualização de Gráficos
         plot_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
@@ -411,42 +402,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkLabel(index_frame, text="Índice inicial:").pack(side="left", padx=(0, 10))
         ctk.CTkEntry(index_frame, textvariable=self.start_idx_var, width=80).pack(side="left")
-        
-        # Card: Opções de Visualização de Gráficos
-        plot_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        plot_card.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            plot_card, 
-            text="Opções de Visualização de Gráficos",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-        
-        ctk.CTkLabel(
-            plot_card,
-            text="Selecione os elementos que deseja visualizar nos gráficos:",
-            font=ctk.CTkFont(size=11),
-            text_color="gray60"
-        ).pack(anchor="w", padx=15, pady=(0, 10))
-        
-        # Grid de checkboxes de visualização
-        plot_checks_frame = ctk.CTkFrame(plot_card, fg_color="transparent")
-        plot_checks_frame.pack(fill="x", padx=15, pady=(0, 15))
-        
-        # Coluna 1
-        plot_col1 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
-        plot_col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
-        ctk.CTkCheckBox(plot_col1, text="Barras de frequência", variable=self.plot_bars_var, command=self._save_prefs).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(plot_col1, text="Pontos de dados", variable=self.plot_points_var, command=self._save_prefs).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(plot_col1, text="Curva Gaussiana", variable=self.plot_gaussian_var, command=self._save_prefs).pack(anchor="w", pady=5)
-        
-        # Coluna 2
-        plot_col2 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
-        plot_col2.pack(side="left", fill="both", expand=True)
-        
-        ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var, command=self._save_prefs).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var, command=self._save_prefs).pack(anchor="w", pady=5)
     
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
@@ -956,6 +911,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 excel_paths = []  # Armazenar paths dos Excel para comparativo
                 total = len(selected_files)
                 
+                # NOTA: Processamento paralelo (parallel_process) desabilitado por segurança
+                # Para evitar conflitos de matplotlib em threads múltiplas
+                
                 for idx, lis_path in enumerate(selected_files, start=1):
                     if self.cancel_event.is_set():
                         self.log("Processamento cancelado pelo usuário")
@@ -977,7 +935,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     # Nome base do arquivo (sem extensão)
                     base_name = lis_path.stem
                     
-                    # Salvar Excel com nome do arquivo .lis
+                    # Salvar Excel com nome do arquivo .lis (sempre sobrescreve)
                     excel_path = outdir / f"{base_name}.xlsx"
                     save_df_to_excel_only(df, excel_path)
                     excel_paths.append(excel_path)  # Adicionar à lista para comparativo
@@ -987,7 +945,10 @@ class ModernLisAnalysisApp(ctk.CTk):
                         computed_stats = calcular_estatisticas_do_df(df)
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
                     except Exception as e:
-                        self.log(f"Erro ao calcular estatísticas: {e}")
+                        error_msg = f"Erro ao calcular estatísticas: {e}"
+                        if not self.hide_errors_var.get():
+                            self.log(error_msg)
+                            messagebox.showwarning("Aviso", error_msg)
                     
                     # Gráfico individual (se não for modo "só comparativo")
                     if not self.only_comparative_var.get():
@@ -995,11 +956,16 @@ class ModernLisAnalysisApp(ctk.CTk):
                         self._criar_grafico_customizado(excel_path, outdir, graph_name, plot_options, mostrar=self.show_plots_var.get())
                     
                     # Séries temporais
-                    time_series_df = parse_lis_time_series(lis_path)
-                    if time_series_df is not None:
-                        save_time_series_to_excel(time_series_df, excel_path)
-                        series_name = f"series_temporais_{base_name}.png"
-                        criar_grafico_series_temporais(time_series_df, outdir / series_name, lis_name=lis_path.name)
+                    try:
+                        time_series_df = parse_lis_time_series(lis_path)
+                        if time_series_df is not None:
+                            save_time_series_to_excel(time_series_df, excel_path)
+                            series_name = f"series_temporais_{base_name}.png"
+                            criar_grafico_series_temporais(time_series_df, outdir / series_name, lis_name=lis_path.name)
+                    except Exception as e:
+                        error_msg = f"Erro ao processar séries temporais: {e}"
+                        if not self.hide_errors_var.get():
+                            self.log(error_msg)
                     
                     self.log(f"Concluído: {lis_path.name}")
                 

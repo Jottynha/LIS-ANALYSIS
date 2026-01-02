@@ -992,9 +992,14 @@ class ModernLisAnalysisApp(ctk.CTk):
             if plot_options.get('show_points', True):
                 ax.scatter(x, y, color='tab:blue', s=30, zorder=5, label='Pontos (x vs freq)')
             
-            # Curva Gaussiana
+            # Curva Gaussiana - estendida para mostrar curva completa
             if plot_options.get('show_gaussian', True) and sigma and np.isfinite(sigma) and sigma > 0:
-                x_smooth = np.linspace(np.min(x), np.max(x), 800)
+                # Estender para ±3σ do centro (ou além dos dados se for maior)
+                x_min_gauss = min(np.min(x), mu - 3*sigma)
+                x_max_gauss = max(np.max(x), mu + 3*sigma)
+                # Adicionar margem extra de 10%
+                margin = (x_max_gauss - x_min_gauss) * 0.1
+                x_smooth = np.linspace(x_min_gauss - margin, x_max_gauss + margin, 1000)
                 pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
                 scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
                 y_smooth = pdf * scale_factor
@@ -1139,9 +1144,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if plot_options.get('show_points', True):
                     ax.scatter(x, y, s=25, alpha=0.6, color=color, label=f"{label} (pontos)", marker='o', edgecolors='white', linewidths=0.5)
                 
-                # Curva gaussiana
+                # Curva gaussiana - estendida para mostrar curva completa
                 if plot_options.get('show_gaussian', True) and sigma and np.isfinite(sigma) and sigma > 0:
-                    x_smooth = np.linspace(np.min(x), np.max(x), 800)
+                    # Estender para ±3σ do centro (ou além dos dados se for maior)
+                    x_min_gauss = min(np.min(x), mu - 3*sigma)
+                    x_max_gauss = max(np.max(x), mu + 3*sigma)
+                    # Adicionar margem extra de 10%
+                    margin = (x_max_gauss - x_min_gauss) * 0.1
+                    x_smooth = np.linspace(x_min_gauss - margin, x_max_gauss + margin, 1000)
                     pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
                     scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
                     y_smooth = pdf * scale_factor

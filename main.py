@@ -776,15 +776,21 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
     mu = computed_stats.get('mean') if 'mean' in computed_stats else (summary_from_excel.get('mean', (None, None))[0] if 'mean' in summary_from_excel else np.nan)
     sigma = computed_stats.get('std_dev') if 'std_dev' in computed_stats else (summary_from_excel.get('std_dev', (None, None))[0] if 'std_dev' in summary_from_excel else np.nan)
 
-    # gerar curva gaussiana
-    x_smooth = np.linspace(np.min(x), np.max(x), 800)
+    # gerar curva gaussiana - estendida para mostrar curva completa
     if sigma and np.isfinite(sigma) and sigma > 0:
+        # Estender para ±3σ do centro (ou além dos dados se for maior)
+        x_min_gauss = min(np.min(x), mu - 3*sigma)
+        x_max_gauss = max(np.max(x), mu + 3*sigma)
+        # Adicionar margem extra de 10%
+        margin = (x_max_gauss - x_min_gauss) * 0.1
+        x_smooth = np.linspace(x_min_gauss - margin, x_max_gauss + margin, 1000)
         pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
         scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
         y_smooth = pdf * scale_factor
         pdf_x = np.exp(-0.5 * ((x - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
         y_pred_x = pdf_x * scale_factor
     else:
+        x_smooth = np.linspace(np.min(x), np.max(x), 800)
         y_smooth = np.zeros_like(x_smooth)
         y_pred_x = np.zeros_like(x)
 
@@ -1078,9 +1084,14 @@ def criar_grafico_comparativo(excel_paths: List[Path], outdir: Path, mostrar: bo
     for (x, y, mu, sigma), label in zip(series, labels):
         # pontos (suavemente)
         ax.scatter(x, y, s=20, alpha=0.5, label=f"{label} pontos")
-        # ajuste gaussiano
+        # ajuste gaussiano - estendido para mostrar curva completa
         if sigma and np.isfinite(sigma) and sigma > 0:
-            x_smooth = np.linspace(np.min(x), np.max(x), 800)
+            # Estender para ±3σ do centro (ou além dos dados se for maior)
+            x_min_gauss = min(np.min(x), mu - 3*sigma)
+            x_max_gauss = max(np.max(x), mu + 3*sigma)
+            # Adicionar margem extra de 10%
+            margin = (x_max_gauss - x_min_gauss) * 0.1
+            x_smooth = np.linspace(x_min_gauss - margin, x_max_gauss + margin, 1000)
             pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
             scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
             y_smooth = pdf * scale_factor

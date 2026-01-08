@@ -17,8 +17,9 @@ __pycache__/
 .pytest_cache/
 
 # PyInstaller
-# deixe o .spec se quiser versionar; ignore artefatos
+# Ignore outros .spec, mas versionar o LIS_ANALYSIS.spec explicitamente
 *.spec
+!LIS_ANALYSIS.spec
 
 # Distribuição e pacotes
 *.egg-info/

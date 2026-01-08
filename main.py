@@ -1225,9 +1225,6 @@ def main():
 
     print("Processo concluído. Verifique a pasta:", outdir)
 
-if __name__ == "__main__":
-    main()
-
 # ---------- Salvar séries temporais em Excel ----------
 def save_time_series_to_excel(df: pd.DataFrame, out_path: Path, sheet_name: str = 'Dados_Temporais'):
     """
@@ -1405,3 +1402,7 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
         plt.close(fig)
     
     return out_path if salvar_png else None
+
+
+if __name__ == "__main__":
+    main()

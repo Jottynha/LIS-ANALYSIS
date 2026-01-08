@@ -1,0 +1,47 @@
+# Arquivos/binaries gerados pelo build
+/dist/
+/build/
+
+# Virtual environments
+.venv/
+.venv-*
+.venv-pyinstaller/
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# PyInstaller
+# deixe o .spec se quiser versionar; ignore artefatos
+*.spec
+
+# Distribuição e pacotes
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+*.whl
+
+# IDEs/editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Sistema / misc
+.DS_Store
+*.log
+.cache/
+
+# Resultado de simulações (opcional, se quiser manter fora do repo)
+Simulation_Result/
+
+# Arquivos locais de configuração
+.env
+
+# Outros
+localpycs/

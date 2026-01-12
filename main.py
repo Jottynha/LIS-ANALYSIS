@@ -9,6 +9,8 @@ Dependências:
 # Bibliotecas necessárias:
 import re
 from pathlib import Path
+import sys
+import os
 import argparse
 from typing import Optional, Tuple, List, Dict
 import pandas as pd
@@ -1405,4 +1407,38 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
 
 
 if __name__ == "__main__":
-    main()
+    # Ao rodar empacotado, garantir que caminhos relativos sejam resolvidos
+    try:
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys.executable).parent
+        else:
+            base_dir = Path(__file__).resolve().parent
+        os.chdir(str(base_dir))
+    except Exception:
+        pass
+
+    # Tornar GUI o comportamento padrão ao abrir por duplo-clique (sem argumentos)
+    if len(sys.argv) == 1:
+        sys.argv.append("--gui")
+
+    try:
+        main()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        # Tentar mostrar caixa de diálogo com o traceback (Windows/GUI-friendly)
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("Erro ao iniciar", tb)
+            root.destroy()
+        except Exception:
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, tb, "Erro ao iniciar", 0x10)
+            except Exception:
+                # Último recurso: imprimir no stdout (útil se for executado via console)
+                print(tb)
+        raise

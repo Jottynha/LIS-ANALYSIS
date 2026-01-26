@@ -12,6 +12,7 @@ import re
 import subprocess
 import shutil
 from datetime import datetime
+import tempfile
 
 class AcpParser:
     """Parser para arquivos .acp (ATPDraw)"""
@@ -325,474 +326,228 @@ class AtpRunner:
         # Ajuda o type checker a entender que agora é str
         atp_text: str = atp_text_opt
         
-        # Criar arquivo temporário .atp
-        temp_atp = acp_path.with_suffix('.atp')
-        deck_content: str = atp_text.replace('\x00', '')  # remover NULs que causam inspeção/pausa
-        if os.name == 'nt':
-            # Normalizar quebras de linha e tabs para evitar travas do STARTUP (UNIXON/NOTAB)
-            deck_content = deck_content.replace('\r\n', '\n').replace('\r', '\n')
-            deck_content = deck_content.replace('\t', '    ')
-            deck_content = deck_content.replace('\n', '\r\n')
-        with open(temp_atp, 'w', encoding='windows-1252', errors='ignore', newline='') as f:
-            f.write(deck_content)
-        
+        # Diretório de saída efetivo: prioriza o output_dir informado pela GUI
+        effective_output_dir = Path(output_dir) if output_dir else self._default_output_dir(acp_path)
+        effective_output_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir = effective_output_dir / 'logs'
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
         print(f"🚀 Executando simulação ATP: {acp_path.name}")
-        
+
+        # Determinar extensão do executável
+        ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
+        solver_executable = shutil.which(self.atpdraw_path) or self.atpdraw_path
+        solver_path = Path(solver_executable)
+
+        # Funções auxiliares locais
+        def _safe_output_path(out_dir: Path, filename: str, ts: str) -> Path:
+            target = out_dir / filename
+            if not target.exists():
+                return target
+            stem = Path(filename).stem
+            suffix = Path(filename).suffix
+            return out_dir / f"{stem}_{ts}{suffix}"
+
+        def _copy_includes_to_stage(stage_dir: Path):
+            include_pat = re.compile(r'\b(INCLUDE|\$INCLUDE|\.INC)\b', re.IGNORECASE)
+            for line in atp_text.splitlines():
+                if not include_pat.search(line):
+                    continue
+                # Tenta extrair caminho entre aspas, caso contrário último token
+                m = re.search(r'"([^"]+)"|\'([^\']+)\'', line)
+                candidate = None
+                if m:
+                    candidate = m.group(1) or m.group(2)
+                else:
+                    parts = line.strip().split()
+                    candidate = parts[-1] if parts else None
+                if not candidate:
+                    continue
+                candidate_norm = candidate.replace('\\', os.sep)
+                inc_path = Path(candidate_norm)
+                if not inc_path.is_absolute():
+                    inc_path = (acp_path.parent / inc_path).resolve()
+                if inc_path.exists() and inc_path.is_file():
+                    rel_target = Path(candidate_norm)
+                    target = stage_dir / rel_target
+                    try:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(inc_path, target)
+                    except Exception:
+                        pass
+
+        def _copy_startup_files(stage_dir: Path):
+            if not solver_path.exists():
+                return
+            for name in ('startup', 'STARTUP'):
+                candidate = solver_path.parent / name
+                if candidate.exists() and candidate.is_file():
+                    try:
+                        shutil.copy2(candidate, stage_dir / name)
+                    except Exception:
+                        pass
+
         try:
-            # Determinar extensão e diretório de execução
-            cmd: List[str]
-            ext = Path(self.atpdraw_path).suffix.lower() if self.atpdraw_path else ''
-            # Política: manter CWD no solver para achar 'startup' e outros artefatos
-            solver_executable = shutil.which(self.atpdraw_path) or self.atpdraw_path
-            solver_path = Path(solver_executable)
-            run_cwd = solver_path.parent if solver_path.exists() else acp_path.parent
+            with tempfile.TemporaryDirectory(prefix='atp_stage_') as tmpdir:
+                stage_dir = Path(tmpdir)
 
-            # Sanitizar nome do deck e copiar para pasta do solver
-            sanitized_name = re.sub(r'[=\s]+', '_', temp_atp.name)
-            deck_in_solver = run_cwd / sanitized_name
-            try:
-                shutil.copy2(temp_atp, deck_in_solver)
-            except Exception:
-                # Fallback: usar caminho original
-                deck_in_solver = temp_atp
-
-            # Heurística simples para copiar includes para o CWD do solver
-            try:
-                include_pat = re.compile(r'\b(INCLUDE|\$INCLUDE|\.INC)\b', re.IGNORECASE)
-                for line in atp_text.splitlines():
-                    if include_pat.search(line):
-                        # Tenta extrair caminho entre aspas, caso contrário último token
-                        m = re.search(r'"([^"]+)"|\'([^\']+)\'', line)
-                        candidate = None
-                        if m:
-                            candidate = m.group(1) or m.group(2)
-                        else:
-                            parts = line.strip().split()
-                            candidate = parts[-1] if parts else None
-                        if candidate:
-                            inc_path = (acp_path.parent / candidate).resolve()
-                            if inc_path.exists() and inc_path.is_file():
-                                target = run_cwd / inc_path.name
-                                if not target.exists():
-                                    try:
-                                        shutil.copy2(inc_path, target)
-                                    except Exception:
-                                        pass
-            except Exception:
-                pass
-
-            # Diretório de saída efetivo: se não especificado, usar pasta /ACP do projeto
-            effective_output_dir = Path(output_dir) if output_dir else self._default_output_dir(acp_path)
-            # Determinar diretórios que serão monitorados para novos arquivos
-            search_dirs: List[Path] = [run_cwd]
-            if acp_path.parent not in search_dirs:
-                search_dirs.append(acp_path.parent)
-            # Se for .bat, também verificar pasta do script (pode ser diferente)
-            if ext in ['.bat', '.cmd']:
-                script_dir = Path(self.atpdraw_path).parent
-                if script_dir.exists() and script_dir not in search_dirs:
-                    search_dirs.append(script_dir)
-
-            # Listar arquivos antes para detectar novos gerados em cada diretório
-            before_files = {str(d): set(p.name for p in d.glob('*')) for d in search_dirs if d.exists()}
-
-            # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
-            # Usar somente o nome do deck se ele estiver no CWD
-            deck_arg = deck_in_solver.name if deck_in_solver.parent == run_cwd else str(deck_in_solver)
-            if ext in ['.bat', '.cmd']:
-                script_path = Path(self.atpdraw_path)
+                # Criar deck .atp no staging (nome sanitizado para evitar problemas)
+                safe_stem = re.sub(r'[=\s]+', '_', acp_path.stem)
+                deck_name = f"{safe_stem}.atp"
+                deck_path = stage_dir / deck_name
+                deck_content: str = atp_text.replace('\x00', '')
                 if os.name == 'nt':
-                    cmd = ['cmd', '/c', str(script_path), deck_arg]
-                else:
-                    if shutil.which('wine'):
-                        cmd = ['wine', 'cmd', '/c', str(script_path), deck_arg]
+                    deck_content = deck_content.replace('\r\n', '\n').replace('\r', '\n')
+                    deck_content = deck_content.replace('\t', '    ')
+                    deck_content = deck_content.replace('\n', '\r\n')
+                with open(deck_path, 'w', encoding='windows-1252', errors='ignore', newline='') as f:
+                    f.write(deck_content)
+
+                # Copiar includes e arquivos auxiliares
+                _copy_includes_to_stage(stage_dir)
+                _copy_startup_files(stage_dir)
+
+                # Montar comando com suporte a .bat/.cmd (Windows ou Wine)
+                cmd: List[str]
+                deck_arg = deck_path.name
+                if ext in ['.bat', '.cmd']:
+                    script_path = Path(self.atpdraw_path)
+                    if os.name == 'nt':
+                        cmd = ['cmd', '/c', str(script_path), deck_arg]
                     else:
-                        print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
-                        print("💡 Use tpbig/atpmingw nativo ou instale o Wine para usar scripts .bat.")
-                        return None
-            else:
-                cmd = [self.atpdraw_path, deck_arg]
+                        if shutil.which('wine'):
+                            cmd = ['wine', 'cmd', '/c', str(script_path), deck_arg]
+                        else:
+                            print("❌ Não é possível executar .bat neste sistema (Wine não encontrado).")
+                            print("💡 Use tpbig/atpmingw nativo ou instale o Wine para usar scripts .bat.")
+                            return None
+                else:
+                    cmd = [self.atpdraw_path, deck_arg]
 
-            # Executar ATP com controle de timeout robusto
-            result_stdout = ''
-            result_stderr = ''
-            result_returncode = None
-            try:
-                # Preferir Popen para poder encerrar árvore de processos em timeout
-                if os.name == 'nt':
-                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True)
-                else:
-                    # Em POSIX, criar novo grupo para matar filhos em cascata
-                    import os as _os, signal as _signal  # locais para evitar shadow
-                    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
-                # Timeout padrão 300s (5 min). Pode ser sobrescrito pela variável de ambiente ATP_TIMEOUT
-                timeout_sec = 300
+                # Executar ATP com controle de timeout robusto
+                result_stdout = ''
+                result_stderr = ''
+                result_returncode = None
                 try:
-                    env_timeout = os.environ.get('ATP_TIMEOUT')
-                    if env_timeout:
-                        timeout_sec = int(env_timeout)
-                except Exception:
-                    pass
-                # Enviar 'go' para avançar caso haja PAUSE no deck; se não necessário, é ignorado
-                result_stdout, result_stderr = proc.communicate(input='go\n', timeout=timeout_sec)
-                result_returncode = proc.returncode
-            except subprocess.TimeoutExpired:
-                # Tentar encerrar processo e filhos
-                if os.name == 'nt':
-                    try:
-                        subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                    except Exception:
-                        pass
-                else:
-                    try:
+                    if os.name == 'nt':
+                        proc = subprocess.Popen(cmd, cwd=stage_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True)
+                    else:
                         import os as _os, signal as _signal
-                        _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+                        proc = subprocess.Popen(cmd, cwd=stage_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE, text=True, preexec_fn=_os.setsid)
+                    timeout_sec = 300
+                    try:
+                        env_timeout = os.environ.get('ATP_TIMEOUT')
+                        if env_timeout:
+                            timeout_sec = int(env_timeout)
                     except Exception:
                         pass
-                result_returncode = -9
-                result_stdout = (result_stdout or '')
-                result_stderr = (result_stderr or '') + f"\n[timeout] Processo excedeu 300s e foi terminado."
-            except Exception as e:
-                # Falha genérica ao executar
-                try:
-                    if proc and proc.poll() is None:
-                        proc.kill()
-                except Exception:
-                    pass
-                result_returncode = -1
-                result_stderr = f"Falha ao executar ATP: {e}"
+                    result_stdout, result_stderr = proc.communicate(input='go\n', timeout=timeout_sec)
+                    result_returncode = proc.returncode
+                except subprocess.TimeoutExpired:
+                    if os.name == 'nt':
+                        try:
+                            subprocess.run(['taskkill', '/PID', str(proc.pid), '/T', '/F'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            import os as _os, signal as _signal
+                            _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+                        except Exception:
+                            pass
+                    result_returncode = -9
+                    result_stdout = (result_stdout or '')
+                    result_stderr = (result_stderr or '') + "\n[timeout] Processo excedeu 300s e foi terminado."
+                except Exception as e:
+                    try:
+                        if proc and proc.poll() is None:
+                            proc.kill()
+                    except Exception:
+                        pass
+                    result_returncode = -1
+                    result_stderr = f"Falha ao executar ATP: {e}"
 
-            # Listar arquivos depois (em todos os diretórios monitorados)
-            after_files = {str(d): set(p.name for p in d.glob('*')) for d in search_dirs if d.exists()}
-            new_files_per_dir = {}
-            for d in before_files:
-                before_set = before_files.get(d, set())
-                after_set = after_files.get(d, set())
-                new_files_per_dir[d] = sorted(after_set - before_set)
-            # Agregar lista geral
-            new_files = []
-            for v in new_files_per_dir.values():
-                new_files.extend(v)
-            new_files = sorted(set(new_files))
-            
-            # Procurar arquivo .lis gerado (case-insensitive, .lis ou .LIS)
-            lis_path = None
-            candidates: List[Path] = [
-                acp_path.with_suffix('.lis'),
-                acp_path.with_suffix('.LIS')
-            ]
-            for c in candidates:
-                if c.exists():
-                    lis_path = c
-                    break
-            # Se não encontrado diretamente, procurar por mesmo stem nos diretórios monitorados
-            if lis_path is None:
-                try:
-                    extra_search = list(search_dirs)  # já inclui run_cwd e pasta do .acp
-                    sanitized_stem = Path(deck_in_solver.name).stem if deck_in_solver else acp_path.stem
-                    for d in extra_search:
-                        for p in list(d.glob('*.lis')) + list(d.glob('*.LIS')):
-                            if p.stem.lower() in (acp_path.stem.lower(), sanitized_stem.lower()):
-                                lis_path = p
-                                break
-                        if lis_path:
-                            break
-                except Exception:
-                    pass
+                # Coletar arquivos gerados no staging
+                new_files = sorted(p.name for p in stage_dir.glob('*'))
+                lis_candidates = list(stage_dir.glob('*.lis')) + list(stage_dir.glob('*.LIS'))
+                lis_path = None
+                if lis_candidates:
+                    lis_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    lis_path = lis_candidates[0]
 
-            # Verificar código de retorno do processo ATP
-            log_entry = None
-            logs_dir = effective_output_dir / 'logs'
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
+                # Log
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
 
-            if result_returncode != 0:
-                print(f"❌ ATP retornou código {result_returncode}. Considerando falha na simulação.")
-                print(f"   Stdout: {result_stdout[:200]}")
-                print(f"   Stderr: {result_stderr[:200]}")
-                # Se um .lis foi gerado e NÃO está vazio, vamos aproveitar o resultado mesmo com timeout/erro
-                effective_lis: Optional[Path] = None
-                lis_size = 0
+                # Verificar .lis
                 if lis_path and lis_path.exists():
                     try:
                         lis_size = lis_path.stat().st_size
                     except Exception:
                         lis_size = 0
-                    if lis_size > 0:
-                        effective_lis = lis_path
-                if effective_lis is not None:
-                    # Mover sempre para o diretório de saída efetivo
-                    effective_output_dir.mkdir(parents=True, exist_ok=True)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    new_lis = effective_output_dir / f"{acp_path.stem}_{timestamp}.lis"
-                    try:
-                        shutil.move(effective_lis, new_lis)
-                        effective_lis = new_lis
-                    except Exception:
-                        # Se mover falhar, manter original
-                        pass
-                    # Detectar arquivo .dbg correspondente e mover também
-                    dbg_path = None
-                    for dir_str, files in new_files_per_dir.items():
-                        for fname in files:
-                            if fname.lower().endswith('.dbg') and Path(fname).stem.lower() == acp_path.stem.lower():
-                                candidate = Path(dir_str) / fname
-                                if candidate.exists():
-                                    dbg_path = candidate
-                                    break
-                        if dbg_path:
-                            break
-                    moved_dbg_path = None
-                    if dbg_path:
+                    if lis_size <= 0:
                         try:
-                            moved_dbg_path = effective_output_dir / f"{acp_path.stem}_{timestamp}.dbg"
-                            shutil.move(dbg_path, moved_dbg_path)
-                            dbg_path = moved_dbg_path
+                            lis_path.unlink(missing_ok=True)
                         except Exception:
                             pass
-                    # Log como "timeout_with_lis" e retornar caminho
-                    try:
-                        lines = [
-                            "Status: timeout_with_lis",
-                            f"Return code: {result_returncode}",
-                            f"CWD: {run_cwd}",
-                            f"Command: {' '.join(cmd)}",
-                            f"New files: {', '.join(new_files) if new_files else '(none)'}",
-                            "New files per directory:",
-                        ]
-                        for d, files in new_files_per_dir.items():
-                            lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
-                        lines.extend([
-                            f"LIS: {effective_lis} (gerado apesar do erro/timeout; pode estar incompleto)",
-                            f"DBG: {dbg_path if dbg_path else '(none)'}",
-                            "---- STDOUT ----",
-                            result_stdout or '(vazio)',
-                            "---- STDERR ----",
-                            result_stderr or '(vazio)'
-                        ])
-                        log_path.write_text('\n'.join(lines), encoding='utf-8')
-                        print(f"📝 Log salvo em {log_path}")
-                    except Exception as e:
-                        print(f"⚠️ Falha ao salvar log: {e}")
-                    # Limpeza automática de temporários (*.tmp, *.bin) gerados durante a simulação
-                    removed_temp: List[Path] = []
-                    for dir_str, files in new_files_per_dir.items():
-                        base_dir = Path(dir_str)
-                        for fname in files:
-                            lower = fname.lower()
-                            if lower.endswith('.tmp') or lower.endswith('.bin'):
-                                fpath = base_dir / fname
-                                try:
-                                    fpath.unlink(missing_ok=True)
-                                    removed_temp.append(fpath)
-                                except Exception:
-                                    pass
-                    if removed_temp:
-                        print(f"🧹 Temporários removidos: {', '.join(p.name for p in removed_temp)}")
-                        try:
-                            with log_path.open('a', encoding='utf-8') as lf:
-                                lf.write('\nRemoved temps: ' + ', '.join(p.name for p in removed_temp) + '\n')
-                        except Exception:
-                            pass
-                    # Limpar temporário .atp e retornar .lis aproveitado
-                    temp_atp.unlink(missing_ok=True)
-                    return effective_lis
-                # Caso contrário: se existir .lis vazio, remover e registrar erro
-                if lis_path and lis_size <= 0:
-                    try:
-                        lis_path.unlink(missing_ok=True)
-                        print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
-                    except Exception as e:
-                        print(f"⚠️ Não foi possível remover .lis vazio: {e}")
-                # Log erro padrão
-                log_entry = {
-                    'status': 'error',
-                    'returncode': result_returncode,
-                    'command': ' '.join(cmd),
-                    'cwd': str(run_cwd),
-                    'new_files': new_files,
-                    'new_files_per_dir': new_files_per_dir,
-                    'stdout': result_stdout,
-                    'stderr': result_stderr
-                }
-                try:
-                    lines = [
-                        f"Status: {log_entry['status']}",
-                        f"Return code: {log_entry['returncode']}",
-                        f"CWD: {log_entry['cwd']}",
-                        f"Command: {log_entry['command']}",
-                        f"New files: {', '.join(log_entry['new_files']) if log_entry['new_files'] else '(none)'}",
-                        "New files per directory:",
-                    ]
-                    for d, files in log_entry['new_files_per_dir'].items():
-                        lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
-                    lines.extend([
-                        "---- STDOUT ----",
-                        log_entry['stdout'] or '(vazio)',
-                        "---- STDERR ----",
-                        log_entry['stderr'] or '(vazio)'
-                    ])
-                    log_path.write_text('\n'.join(lines), encoding='utf-8')
-                    print(f"📝 Log salvo em {log_path}")
-                except Exception as e:
-                    print(f"⚠️ Falha ao salvar log: {e}")
-                return None
-            
-            if lis_path and lis_path.exists():
-                # Validar tamanho do .lis (> 0 bytes) antes de mover
-                try:
-                    lis_size = lis_path.stat().st_size
-                except Exception:
-                    lis_size = 0
-                
-                if lis_size <= 0:
-                    print("⚠️ .lis gerado, porém vazio (0 bytes). Considerando falha na simulação.")
-                    print(f"   Stdout: {result_stdout[:200]}")
-                    print(f"   Stderr: {result_stderr[:200]}")
-                    # Remover arquivo vazio para evitar acúmulo
-                    try:
-                        lis_path.unlink(missing_ok=True)
-                        print(f"🗑️  Arquivo .lis vazio removido: {lis_path}")
-                    except Exception as e:
-                        print(f"⚠️ Não foi possível remover .lis vazio: {e}")
-                    # Log arquivo vazio
-                    try:
-                        lines = [
-                            "Status: empty_lis",
-                            f"Return code: {result_returncode}",
-                            f"CWD: {run_cwd}",
-                            f"Command: {' '.join(cmd)}",
-                            f"New files: {', '.join(new_files) if new_files else '(none)'}",
-                            "New files per directory:",
-                        ]
-                        for d, files in new_files_per_dir.items():
-                            lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
-                        lines.extend([
-                            "---- STDOUT ----",
-                            result_stdout or '(vazio)',
-                            "---- STDERR ----",
-                            result_stderr or '(vazio)'
-                        ])
-                        log_path.write_text('\n'.join(lines), encoding='utf-8')
-                        print(f"📝 Log salvo em {log_path}")
-                    except Exception as e:
-                        print(f"⚠️ Falha ao salvar log: {e}")
-                    return None
-                
-                # Mover sempre para o diretório de saída efetivo (ACP por padrão)
-                effective_output_dir.mkdir(parents=True, exist_ok=True)
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                new_lis = effective_output_dir / f"{acp_path.stem}_{timestamp}.lis"
-                
-                shutil.move(lis_path, new_lis)
-                lis_path = new_lis
+                        lis_path = None
 
-                # Detectar arquivo .dbg correspondente e mover também
-                dbg_path = None
-                for dir_str, files in new_files_per_dir.items():
-                    for fname in files:
-                        if fname.lower().endswith('.dbg') and Path(fname).stem.lower() == acp_path.stem.lower():
-                            candidate = Path(dir_str) / fname
-                            if candidate.exists():
-                                dbg_path = candidate
-                                break
-                    if dbg_path:
-                        break
-                moved_dbg_path = None
-                if dbg_path:
+                # Mover .lis/.dbg preservando o nome gerado
+                moved_lis = None
+                moved_dbg = None
+                if lis_path and lis_path.exists():
+                    target_lis = _safe_output_path(effective_output_dir, lis_path.name, timestamp)
                     try:
-                        moved_dbg_path = effective_output_dir / f"{acp_path.stem}_{timestamp}.dbg"
-                        shutil.move(dbg_path, moved_dbg_path)
-                        dbg_path = moved_dbg_path
+                        shutil.move(lis_path, target_lis)
+                        moved_lis = target_lis
+                    except Exception:
+                        moved_lis = None
+
+                for dbg in stage_dir.glob('*.dbg'):
+                    target_dbg = _safe_output_path(effective_output_dir, dbg.name, timestamp)
+                    try:
+                        shutil.move(dbg, target_dbg)
+                        moved_dbg = target_dbg
                     except Exception:
                         pass
-                
-                print(f"✅ Simulação concluída: {lis_path}")
-                # Log sucesso
+
+                # Definir status
+                status = 'success' if moved_lis else 'no_lis'
+                if result_returncode not in (0, None):
+                    status = 'error_with_lis' if moved_lis else 'error'
+
+                # Salvar log
                 try:
                     lines = [
-                        "Status: success",
+                        f"Status: {status}",
                         f"Return code: {result_returncode}",
-                        f"CWD: {run_cwd}",
+                        f"CWD: {stage_dir}",
                         f"Command: {' '.join(cmd)}",
                         f"New files: {', '.join(new_files) if new_files else '(none)'}",
-                        "New files per directory:",
-                    ]
-                    for d, files in new_files_per_dir.items():
-                        lines.append(f"  {d}: {', '.join(files) if files else '(none)'}")
-                    lines.extend([
-                        f"LIS: {lis_path}",
-                        f"DBG: {dbg_path if dbg_path else '(none)'}",
+                        f"LIS: {moved_lis if moved_lis else '(none)'}",
+                        f"DBG: {moved_dbg if moved_dbg else '(none)'}",
                         "---- STDOUT ----",
                         result_stdout or '(vazio)',
                         "---- STDERR ----",
                         result_stderr or '(vazio)'
-                    ])
+                    ]
                     log_path.write_text('\n'.join(lines), encoding='utf-8')
                     print(f"📝 Log salvo em {log_path}")
                 except Exception as e:
                     print(f"⚠️ Falha ao salvar log: {e}")
 
-                # Limpeza automática de temporários (*.tmp, *.bin) gerados durante a simulação
-                removed_temp: List[Path] = []
-                for dir_str, files in new_files_per_dir.items():
-                    base_dir = Path(dir_str)
-                    for fname in files:
-                        lower = fname.lower()
-                        # Mantém .lis e .dbg; remove .tmp e .bin (scratch)
-                        if lower.endswith('.tmp') or lower.endswith('.bin'):
-                            fpath = base_dir / fname
-                            try:
-                                fpath.unlink(missing_ok=True)
-                                removed_temp.append(fpath)
-                            except Exception:
-                                pass
-                if removed_temp:
-                    print(f"🧹 Temporários removidos: {', '.join(p.name for p in removed_temp)}")
-                    # Acrescentar informação ao log (append)
-                    try:
-                        with log_path.open('a', encoding='utf-8') as lf:
-                            lf.write('\nRemoved temps: ' + ', '.join(p.name for p in removed_temp) + '\n')
-                    except Exception:
-                        pass
-                
-                # Limpar arquivos temporários
-                temp_atp.unlink(missing_ok=True)
-                
-                return lis_path
-            else:
-                print(f"⚠️ Simulação executada mas .lis não foi gerado")
+                if moved_lis:
+                    print(f"✅ Simulação concluída: {moved_lis}")
+                    return moved_lis
+
+                print("⚠️ Simulação executada mas .lis não foi gerado")
                 print(f"   Stdout: {result_stdout[:200]}")
                 print(f"   Stderr: {result_stderr[:200]}")
-                # Log ausência de .lis
-                try:
-                    log_path.write_text('\n'.join([
-                        "Status: no_lis",
-                        f"Return code: {result_returncode}",
-                        f"CWD: {run_cwd}",
-                        f"Command: {' '.join(cmd)}",
-                        f"New files: {', '.join(new_files) if new_files else '(none)'}",
-                        "---- STDOUT ----",
-                        result_stdout or '(vazio)',
-                        "---- STDERR ----",
-                        result_stderr or '(vazio)'
-                    ]), encoding='utf-8')
-                    print(f"📝 Log salvo em {log_path}")
-                except Exception as e:
-                    print(f"⚠️ Falha ao salvar log: {e}")
                 return None
-        
-        except subprocess.TimeoutExpired:
-            print("❌ Timeout: simulação excedeu o tempo limite e foi interrompida")
-            return None
+
         except Exception as e:
             print(f"❌ Erro ao executar ATP: {e}")
             return None
-        finally:
-            # Limpar arquivos temporários
-            temp_atp.unlink(missing_ok=True)
 
     def _default_output_dir(self, acp_path: Path) -> Path:
         """Resolve diretório padrão de saída para .lis/.dbg.

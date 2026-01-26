@@ -1270,6 +1270,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         """Executar simulação ATP"""
         atp_exe = self.atp_executable_var.get()
         acp_file = self.acp_file_var.get()
+        outdir = self.outdir_var.get()
         
         if not atp_exe or not Path(atp_exe).exists():
             messagebox.showerror("Erro", "Executável ATP não encontrado")
@@ -1278,20 +1279,28 @@ class ModernLisAnalysisApp(ctk.CTk):
         if not acp_file or not Path(acp_file).exists():
             messagebox.showerror("Erro", "Arquivo .acp não encontrado")
             return
+
+        if not outdir:
+            messagebox.showerror("Erro", "Pasta de saída não informada")
+            return
         
         self.log("Iniciando simulação ATP...")
         
         def worker():
             try:
                 runner = AtpRunner(atp_exe)
-                result = runner.run_simulation(Path(acp_file))
+                result = runner.run_simulation(Path(acp_file), output_dir=Path(outdir))
                 
                 if result:
                     self.log(f"Simulação concluída: {result}")
-                    self._update_simulation_results(f"Sucesso!\nArquivo .lis gerado: {result}")
+                    self._update_simulation_results(
+                        f"Sucesso!\nArquivo .lis gerado: {result}\nPasta de saída: {outdir}"
+                    )
                 else:
                     self.log("Simulação falhou")
-                    self._update_simulation_results("Falha na simulação. Verifique os logs.")
+                    self._update_simulation_results(
+                        f"Falha na simulação. Verifique os logs em: {Path(outdir) / 'logs'}"
+                    )
             except Exception as e:
                 self.log(f"Erro: {e}")
                 self._update_simulation_results(f"Erro:\n{str(e)}")

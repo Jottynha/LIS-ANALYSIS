@@ -30,17 +30,12 @@ try:
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
-    from acp_parser import (
-        AcpParser,
-        AtpRunner,
-        modify_acp_rpi,
-        run_acp_simulation
-    )
     from control_detector import (
         ControlDetector,
         FileControlInfo,
         analyze_workspace_files
     )
+    from atp_runner import ATPRunner
 except Exception:
     raise
 
@@ -140,10 +135,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.save_logs_var = tk.BooleanVar(value=True)
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
-        
+
         # Variáveis ATP
-        self.atp_executable_var = tk.StringVar(value='')
+        self.atp_solver_var = tk.StringVar(value='')
         self.acp_file_var = tk.StringVar(value='')
+        self.atp_timeout_var = tk.IntVar(value=300)
+        
         
         # Opções de visualização de gráficos
         self.plot_bars_var = tk.BooleanVar(value=True)
@@ -177,7 +174,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.save_logs_var.set(data.get('save_logs', True))
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
-                self.atp_executable_var.set(data.get('atp_executable', ''))
+                self.atp_solver_var.set(data.get('atp_solver', ''))
+                self.acp_file_var.set(data.get('acp_file', ''))
+                self.atp_timeout_var.set(int(data.get('atp_timeout', 300)))
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -204,7 +203,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'save_logs': self.save_logs_var.get(),
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
-                'atp_executable': self.atp_executable_var.get(),
+                'atp_solver': self.atp_solver_var.get(),
+                'acp_file': self.acp_file_var.get(),
+                'atp_timeout': int(self.atp_timeout_var.get()),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -464,79 +465,94 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Dicionário para rastrear checkboxes dos arquivos
         self.file_checkboxes = {}
         self.file_selection_vars = {}
-    
+
     def _build_simulation_tab(self):
         """Aba de Simulação ATP"""
         tab = self.tabview.tab("Simulacao ATP")
-        
-        # Frame scrollable
+
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Card: Executável ATP
+
+        # Card: Executável do solver
         exec_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         exec_card.pack(fill="x", pady=(0, 15))
-        
+
         ctk.CTkLabel(
-            exec_card, 
+            exec_card,
             text="Executável ATP",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
-        
-        ctk.CTkLabel(exec_card, text="Caminho para tpbig.exe ou runATP.bat:").pack(anchor="w", padx=15, pady=(5, 0))
+
+        ctk.CTkLabel(exec_card, text="Caminho para tpbig/atpmingw ou runATP.bat:").pack(anchor="w", padx=15, pady=(5, 0))
         exec_frame = ctk.CTkFrame(exec_card, fg_color="transparent")
         exec_frame.pack(fill="x", padx=15, pady=(5, 15))
-        
-        self.atp_exec_entry = ctk.CTkEntry(exec_frame, textvariable=self.atp_executable_var, width=900)
+
+        self.atp_exec_entry = ctk.CTkEntry(exec_frame, textvariable=self.atp_solver_var, width=900)
         self.atp_exec_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
+
         ctk.CTkButton(
-            exec_frame, 
-            text="Escolher", 
-            command=self._choose_atp_executable,
+            exec_frame,
+            text="Escolher",
+            command=self._choose_atp_solver,
             width=120
         ).pack(side="left")
-        
+
         # Card: Arquivo .acp
         acp_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         acp_card.pack(fill="x", pady=(0, 15))
-        
+
         ctk.CTkLabel(
-            acp_card, 
+            acp_card,
             text="Arquivo .acp",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
-        
+
         ctk.CTkLabel(acp_card, text="Arquivo .acp para simular:").pack(anchor="w", padx=15, pady=(5, 0))
         acp_frame = ctk.CTkFrame(acp_card, fg_color="transparent")
         acp_frame.pack(fill="x", padx=15, pady=(5, 15))
-        
+
         self.acp_file_entry = ctk.CTkEntry(acp_frame, textvariable=self.acp_file_var, width=900)
         self.acp_file_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        
+
         ctk.CTkButton(
-            acp_frame, 
-            text="Escolher", 
+            acp_frame,
+            text="Escolher",
             command=self._choose_acp_file,
             width=120
         ).pack(side="left")
-        
+
+        # Card: Timeout
+        timeout_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        timeout_card.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            timeout_card,
+            text="Timeout (s)",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        timeout_frame = ctk.CTkFrame(timeout_card, fg_color="transparent")
+        timeout_frame.pack(fill="x", padx=15, pady=(5, 15))
+
+        ctk.CTkLabel(timeout_frame, text="Tempo máximo de execução:").pack(side="left", padx=(0, 10))
+        ctk.CTkEntry(timeout_frame, textvariable=self.atp_timeout_var, width=120).pack(side="left")
+
         # Card: Ações
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
-        
+
         ctk.CTkLabel(
-            action_card, 
+            action_card,
             text="Executar Simulação",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
-        
+
         buttons_frame = ctk.CTkFrame(action_card, fg_color="transparent")
         buttons_frame.pack(padx=15, pady=(0, 15))
-        
+
         ctk.CTkButton(
-            buttons_frame, 
-            text="Executar ATP", 
+            buttons_frame,
+            text="Executar ATP",
             command=self._run_atp_simulation,
             width=200,
             height=40,
@@ -544,18 +560,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             fg_color="#2196F3",
             hover_color="#1976D2"
         ).pack(side="left", padx=5)
-        
-        ctk.CTkButton(
-            buttons_frame, 
-            text="Detectar Parâmetros", 
-            command=self._detect_parameters,
-            width=200,
-            height=40,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#FF9800",
-            hover_color="#F57C00"
-        ).pack(side="left", padx=5)
-        
+
         # Área de resultados
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=200)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
@@ -640,17 +645,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         if folder:
             self.outdir_var.set(folder)
             self._save_prefs()
-    
-    def _choose_atp_executable(self):
+
+    def _choose_atp_solver(self):
         """Escolher executável ATP"""
         file = filedialog.askopenfilename(
             title="Escolher executável ATP",
             filetypes=[("Executáveis", "*.exe *.bat *.cmd"), ("Todos", "*.*")]
         )
         if file:
-            self.atp_executable_var.set(file)
+            self.atp_solver_var.set(file)
             self._save_prefs()
-    
+
     def _choose_acp_file(self):
         """Escolher arquivo .acp"""
         file = filedialog.askopenfilename(
@@ -659,6 +664,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         if file:
             self.acp_file_var.set(file)
+            self._save_prefs()
+    
     
     def _clear_filter(self):
         """Limpar filtro"""
@@ -715,19 +722,19 @@ class ModernLisAnalysisApp(ctk.CTk):
         except Exception as e:
             self.log(f"Erro ao limpar pasta: {e}")
             messagebox.showerror("Erro", f"Erro ao limpar pasta:\n{str(e)}")
-    
+
     def _cancel_processing(self):
         """Cancelar processamento em andamento"""
         self.cancel_event.set()
         self.log("Cancelamento solicitado...")
-    
+
     def _clear_logs(self):
         """Limpar área de logs"""
         self.log_textbox.configure(state="normal")
         self.log_textbox.delete("1.0", "end")
         self.log_textbox.configure(state="disabled")
         self.log("Logs limpos")
-    
+
     def _save_logs_to_file(self):
         """Salvar logs em arquivo"""
         file = filedialog.asksaveasfilename(
@@ -742,7 +749,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 messagebox.showinfo("Sucesso", f"Logs salvos em:\n{file}")
             except Exception as e:
                 messagebox.showerror("Erro", f"Falha ao salvar logs:\n{e}")
-    
+
     def log(self, message: str):
         """Adiciona mensagem ao log"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -751,6 +758,55 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.insert("end", full_msg)
         self.log_textbox.see("end")
         self.log_textbox.configure(state="disabled")
+
+    def _run_atp_simulation(self):
+        """Executar simulação ATP"""
+        solver_path = self.atp_solver_var.get()
+        acp_file = self.acp_file_var.get()
+        outdir = self.outdir_var.get()
+        timeout = int(self.atp_timeout_var.get() or 300)
+
+        if not solver_path:
+            messagebox.showerror("Erro", "Executável ATP não informado")
+            return
+
+        if not acp_file or not Path(acp_file).exists():
+            messagebox.showerror("Erro", "Arquivo .acp não encontrado")
+            return
+
+        if not outdir:
+            messagebox.showerror("Erro", "Pasta de saída não informada")
+            return
+
+        self.log("Iniciando simulação ATP...")
+
+        def worker():
+            try:
+                runner = ATPRunner(solver_path, timeout_sec=timeout)
+                result = runner.run_acp(Path(acp_file), Path(outdir))
+
+                if result.lis_path:
+                    self.log(f"Simulação concluída: {result.lis_path}")
+                    self._update_simulation_results(
+                        f"Sucesso!\nArquivo .lis gerado: {result.lis_path}\nLog: {result.log_path}"
+                    )
+                else:
+                    self.log("Simulação falhou")
+                    self._update_simulation_results(
+                        f"Falha na simulação. Log: {result.log_path}"
+                    )
+            except Exception as e:
+                self.log(f"Erro: {e}")
+                self._update_simulation_results(f"Erro:\n{str(e)}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_simulation_results(self, text: str):
+        """Atualiza área de resultados da simulação"""
+        self.simulation_results.configure(state="normal")
+        self.simulation_results.delete("1.0", "end")
+        self.simulation_results.insert("1.0", text)
+        self.simulation_results.configure(state="disabled")
     
     def refresh_list(self):
         """Atualiza lista de arquivos .lis"""
@@ -1265,81 +1321,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.log(f"Erro ao criar gráfico comparativo: {e}")
             import traceback
             traceback.print_exc()
-    
-    def _run_atp_simulation(self):
-        """Executar simulação ATP"""
-        atp_exe = self.atp_executable_var.get()
-        acp_file = self.acp_file_var.get()
-        outdir = self.outdir_var.get()
-        
-        if not atp_exe or not Path(atp_exe).exists():
-            messagebox.showerror("Erro", "Executável ATP não encontrado")
-            return
-        
-        if not acp_file or not Path(acp_file).exists():
-            messagebox.showerror("Erro", "Arquivo .acp não encontrado")
-            return
-
-        if not outdir:
-            messagebox.showerror("Erro", "Pasta de saída não informada")
-            return
-        
-        self.log("Iniciando simulação ATP...")
-        
-        def worker():
-            try:
-                runner = AtpRunner(atp_exe)
-                result = runner.run_simulation(Path(acp_file), output_dir=Path(outdir))
-                
-                if result:
-                    self.log(f"Simulação concluída: {result}")
-                    self._update_simulation_results(
-                        f"Sucesso!\nArquivo .lis gerado: {result}\nPasta de saída: {outdir}"
-                    )
-                else:
-                    self.log("Simulação falhou")
-                    self._update_simulation_results(
-                        f"Falha na simulação. Verifique os logs em: {Path(outdir) / 'logs'}"
-                    )
-            except Exception as e:
-                self.log(f"Erro: {e}")
-                self._update_simulation_results(f"Erro:\n{str(e)}")
-        
-        threading.Thread(target=worker, daemon=True).start()
-    
-    def _detect_parameters(self):
-        """Detectar parâmetros do arquivo .acp"""
-        acp_file = self.acp_file_var.get()
-        
-        if not acp_file or not Path(acp_file).exists():
-            messagebox.showerror("Erro", "Arquivo .acp não encontrado")
-            return
-        
-        self.log("Detectando parâmetros...")
-        
-        try:
-            parser = AcpParser(Path(acp_file))
-            parser.extract_atp_from_acp()
-            params = parser.find_control_parameters()
-            
-            result_text = "Parâmetros detectados:\n\n"
-            result_text += f"• RPI values: {len(params.get('rpi_values', []))}\n"
-            result_text += f"• Switch times: {len(params.get('switch_times', []))}\n"
-            result_text += f"• dt: {params.get('dt')}\n"
-            result_text += f"• tmax: {params.get('tmax')}\n"
-            
-            self._update_simulation_results(result_text)
-            self.log("Parâmetros detectados com sucesso")
-        except Exception as e:
-            self.log(f"Erro ao detectar parâmetros: {e}")
-            self._update_simulation_results(f"Erro:\n{str(e)}")
-    
-    def _update_simulation_results(self, text: str):
-        """Atualiza área de resultados da simulação"""
-        self.simulation_results.configure(state="normal")
-        self.simulation_results.delete("1.0", "end")
-        self.simulation_results.insert("1.0", text)
-        self.simulation_results.configure(state="disabled")
     
     def _get_bg_color(self):
         """Retorna cor de fundo baseada no tema atual"""

@@ -45,7 +45,7 @@ class ATPRunner:
             return self._result_error("solver_not_found", None, None, None, None, "", f"Executável ATP não encontrado: {self.solver_path}")
 
         try:
-            atp_text = self._extract_atp_from_acp(acp_path)
+            atp_text, atp_bytes = self._extract_atp_from_acp(acp_path)
         except Exception as e:
             return self._result_error("extract_failed", None, None, None, None, "", f"Falha ao extrair ATP: {e}")
 
@@ -54,12 +54,8 @@ class ATPRunner:
             stage_dir = Path(tmpdir)
             deck_name = self._safe_deck_name(acp_path.stem) + ".atp"
             deck_path = stage_dir / deck_name
-            deck_content = atp_text.replace("\x00", "")
-            if os.name == "nt":
-                deck_content = deck_content.replace("\r\n", "\n").replace("\r", "\n")
-                deck_content = deck_content.replace("\t", "    ")
-                deck_content = deck_content.replace("\n", "\r\n")
-            deck_path.write_text(deck_content, encoding="windows-1252", errors="ignore")
+            deck_bytes = atp_bytes.replace(b"\x00", b"")
+            deck_path.write_bytes(deck_bytes)
 
             self._copy_includes(atp_text, acp_path.parent, stage_dir)
             self._copy_startup(Path(solver).parent, stage_dir)
@@ -87,21 +83,28 @@ class ATPRunner:
 
             return ATPResult(status, moved_lis, moved_dbg, log_path, returncode, stdout, stderr)
 
-    def _extract_atp_from_acp(self, acp_path: Path) -> str:
+    def _extract_atp_from_acp(self, acp_path: Path) -> tuple[str, bytes]:
+        def score(raw: bytes) -> float:
+            if not raw:
+                return 0.0
+            printable = 0
+            for b in raw:
+                if b in (9, 10, 13) or 32 <= b <= 126 or b >= 160:
+                    printable += 1
+            return printable / len(raw)
+
         with zipfile.ZipFile(acp_path, "r") as zip_ref:
-            atp_file = None
-            for f in zip_ref.namelist():
-                if f.endswith(".$$$") or f.endswith(".$$$"):
-                    atp_file = f
-                    break
-            if not atp_file:
+            candidates = [f for f in zip_ref.namelist() if f.lower().endswith(".$$$")]
+            if not candidates:
                 raise ValueError("Arquivo .$$$ não encontrado dentro do .acp")
-            with zip_ref.open(atp_file) as f:
-                content = f.read()
+
+            best_name = max(candidates, key=lambda n: score(zip_ref.read(n)))
+            content = zip_ref.read(best_name)
         try:
-            return content.decode("windows-1252")
+            text = content.decode("windows-1252")
         except Exception:
-            return content.decode("latin-1", errors="ignore")
+            text = content.decode("latin-1", errors="ignore")
+        return text, content
 
     def _safe_deck_name(self, stem: str) -> str:
         return re.sub(r"[=\s]+", "_", stem)

@@ -45,7 +45,7 @@ class ATPRunner:
             return self._result_error("solver_not_found", None, None, None, None, "", f"Executável ATP não encontrado: {self.solver_path}")
 
         try:
-            atp_text, atp_bytes = self._extract_atp_from_acp(acp_path)
+            atp_text, atp_bytes, atp_entry = self._extract_atp_from_acp(acp_path)
         except Exception as e:
             return self._result_error("extract_failed", None, None, None, None, "", f"Falha ao extrair ATP: {e}")
 
@@ -80,32 +80,65 @@ class ATPRunner:
                 status = "error_with_lis" if moved_lis else "error"
 
             log_path = logs_dir / f"{acp_path.stem}_{timestamp}.log"
-            self._write_log(log_path, status, cmd, stage_dir, moved_lis, moved_dbg, stdout, stderr, returncode)
+            self._write_log(
+                log_path,
+                status,
+                cmd,
+                stage_dir,
+                moved_lis,
+                moved_dbg,
+                stdout,
+                stderr,
+                returncode,
+                extra_lines=[f"ACP entry: {atp_entry}"]
+            )
 
             return ATPResult(status, moved_lis, moved_dbg, log_path, returncode, stdout, stderr)
 
-    def _extract_atp_from_acp(self, acp_path: Path) -> tuple[str, bytes]:
+    def _extract_atp_from_acp(self, acp_path: Path) -> tuple[str, bytes, str]:
         def score(raw: bytes) -> float:
             if not raw:
                 return 0.0
             printable = 0
+            linebreaks = 0
+            nul_count = 0
             for b in raw:
+                if b == 0:
+                    nul_count += 1
+                if b == 10:
+                    linebreaks += 1
                 if b in (9, 10, 13) or 32 <= b <= 126 or b >= 160:
                     printable += 1
-            return printable / len(raw)
+            ratio = printable / len(raw)
+            lb_score = min(linebreaks / 500.0, 1.0)
+            nul_penalty = min(nul_count / len(raw), 1.0)
+            try:
+                text = raw.decode("windows-1252", errors="ignore").upper()
+            except Exception:
+                text = ""
+            keyword_bonus = 0.0
+            if "BEGIN NEW DATA" in text or "BEGIN" in text:
+                keyword_bonus += 0.2
+            if "C " in text or "$" in text:
+                keyword_bonus += 0.05
+            return (ratio * 0.6) + (lb_score * 0.3) + keyword_bonus - (nul_penalty * 0.6)
 
         with zipfile.ZipFile(acp_path, "r") as zip_ref:
             candidates = [f for f in zip_ref.namelist() if f.lower().endswith(".$$$")]
             if not candidates:
                 raise ValueError("Arquivo .$$$ não encontrado dentro do .acp")
 
-            best_name = max(candidates, key=lambda n: score(zip_ref.read(n)))
-            content = zip_ref.read(best_name)
+            scored = []
+            for name in candidates:
+                data = zip_ref.read(name)
+                scored.append((score(data), name, data))
+            scored.sort(key=lambda t: t[0], reverse=True)
+            _, best_name, content = scored[0]
         try:
             text = content.decode("windows-1252")
         except Exception:
             text = content.decode("latin-1", errors="ignore")
-        return text, content
+        return text, content, best_name
 
     def _safe_deck_name(self, stem: str) -> str:
         return re.sub(r"[=\s]+", "_", stem)
@@ -206,6 +239,7 @@ class ATPRunner:
         stdout: str,
         stderr: str,
         returncode: Optional[int],
+        extra_lines: Optional[List[str]] = None,
     ) -> None:
         lines = [
             f"Status: {status}",
@@ -214,11 +248,15 @@ class ATPRunner:
             f"Command: {' '.join(cmd)}",
             f"LIS: {lis_path if lis_path else '(none)'}",
             f"DBG: {dbg_path if dbg_path else '(none)'}",
+        ]
+        if extra_lines:
+            lines.extend(extra_lines)
+        lines.extend([
             "---- STDOUT ----",
             stdout or "(vazio)",
             "---- STDERR ----",
             stderr or "(vazio)",
-        ]
+        ])
         try:
             log_path.write_text("\n".join(lines), encoding="utf-8")
         except Exception:

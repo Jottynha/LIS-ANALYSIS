@@ -55,6 +55,7 @@ class ATPRunner:
             deck_name = self._safe_deck_name(acp_path.stem) + ".atp"
             deck_path = stage_dir / deck_name
             deck_bytes = atp_bytes.replace(b"\x00", b"")
+            deck_bytes = deck_bytes.replace(b"\t", b" ")
             deck_path.write_bytes(deck_bytes)
 
             self._copy_includes(atp_text, acp_path.parent, stage_dir)
@@ -140,6 +141,12 @@ class ATPRunner:
         for name in ("startup", "STARTUP"):
             candidate = solver_dir / name
             if candidate.exists() and candidate.is_file():
+                try:
+                    content = candidate.read_text(encoding="utf-8", errors="ignore")
+                    if re.search(r"\bNOTAB\s*=\s*[1-9]", content) or re.search(r"\bUNIXON\s*=\s*[1-9]", content):
+                        return
+                except Exception:
+                    pass
                 try:
                     shutil.copy2(candidate, stage_dir / name)
                 except Exception:

@@ -140,6 +140,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_solver_var = tk.StringVar(value='')
         self.acp_file_var = tk.StringVar(value='')
         self.atp_timeout_var = tk.IntVar(value=300)
+        self.atp_input_type_var = tk.StringVar(value='acp')
         
         
         # Opções de visualização de gráficos
@@ -177,6 +178,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.atp_solver_var.set(data.get('atp_solver', ''))
                 self.acp_file_var.set(data.get('acp_file', ''))
                 self.atp_timeout_var.set(int(data.get('atp_timeout', 300)))
+                self.atp_input_type_var.set(data.get('atp_input_type', 'acp'))
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -206,6 +208,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'atp_solver': self.atp_solver_var.get(),
                 'acp_file': self.acp_file_var.get(),
                 'atp_timeout': int(self.atp_timeout_var.get()),
+                'atp_input_type': self.atp_input_type_var.get(),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -507,7 +510,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
-        ctk.CTkLabel(acp_card, text="Arquivo .acp para simular:").pack(anchor="w", padx=15, pady=(5, 0))
+        ctk.CTkLabel(acp_card, text="Arquivo .acp ou .atp para simular:").pack(anchor="w", padx=15, pady=(5, 0))
         acp_frame = ctk.CTkFrame(acp_card, fg_color="transparent")
         acp_frame.pack(fill="x", padx=15, pady=(5, 15))
 
@@ -518,6 +521,16 @@ class ModernLisAnalysisApp(ctk.CTk):
             acp_frame,
             text="Escolher",
             command=self._choose_acp_file,
+            width=120
+        ).pack(side="left")
+
+        type_frame = ctk.CTkFrame(acp_card, fg_color="transparent")
+        type_frame.pack(anchor="w", padx=15, pady=(0, 10))
+        ctk.CTkLabel(type_frame, text="Tipo de entrada:").pack(side="left", padx=(0, 10))
+        ctk.CTkOptionMenu(
+            type_frame,
+            values=["acp", "atp"],
+            variable=self.atp_input_type_var,
             width=120
         ).pack(side="left")
 
@@ -658,10 +671,17 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _choose_acp_file(self):
         """Escolher arquivo .acp"""
-        file = filedialog.askopenfilename(
-            title="Escolher arquivo .acp",
-            filetypes=[("Arquivos ACP", "*.acp *.ACP"), ("Todos", "*.*")]
-        )
+        input_type = self.atp_input_type_var.get()
+        if input_type == "atp":
+            file = filedialog.askopenfilename(
+                title="Escolher arquivo .atp",
+                filetypes=[("Arquivos ATP", "*.atp *.ATP"), ("Todos", "*.*")]
+            )
+        else:
+            file = filedialog.askopenfilename(
+                title="Escolher arquivo .acp",
+                filetypes=[("Arquivos ACP", "*.acp *.ACP"), ("Todos", "*.*")]
+            )
         if file:
             self.acp_file_var.set(file)
             self._save_prefs()
@@ -765,13 +785,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         acp_file = self.acp_file_var.get()
         outdir = self.outdir_var.get()
         timeout = int(self.atp_timeout_var.get() or 300)
+        input_type = self.atp_input_type_var.get()
 
         if not solver_path:
             messagebox.showerror("Erro", "Executável ATP não informado")
             return
 
         if not acp_file or not Path(acp_file).exists():
-            messagebox.showerror("Erro", "Arquivo .acp não encontrado")
+            messagebox.showerror("Erro", "Arquivo .acp/.atp não encontrado")
             return
 
         if not outdir:
@@ -783,7 +804,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         def worker():
             try:
                 runner = ATPRunner(solver_path, timeout_sec=timeout)
-                result = runner.run_acp(Path(acp_file), Path(outdir))
+                if input_type == "atp":
+                    result = runner.run_atp(Path(acp_file), Path(outdir))
+                else:
+                    result = runner.run_acp(Path(acp_file), Path(outdir))
 
                 if result.lis_path:
                     self.log(f"Simulação concluída: {result.lis_path}")

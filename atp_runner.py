@@ -54,9 +54,17 @@ class ATPRunner:
             stage_dir = Path(tmpdir)
             deck_name = self._safe_deck_name(acp_path.stem) + ".atp"
             deck_path = stage_dir / deck_name
-            deck_bytes = atp_bytes.replace(b"\x00", b"")
-            deck_bytes = deck_bytes.replace(b"\t", b" ")
-            deck_path.write_bytes(deck_bytes)
+            use_text = self._should_reencode(atp_bytes)
+            if use_text:
+                deck_text = atp_text.replace("\t", " ")
+                deck_text = deck_text.replace("\r\n", "\n").replace("\r", "\n")
+                deck_text = deck_text.replace("\n", "\r\n")
+                deck_path.write_text(deck_text, encoding="windows-1252", errors="ignore")
+                self._write_startup_override(stage_dir)
+            else:
+                deck_bytes = atp_bytes.replace(b"\x00", b"")
+                deck_bytes = deck_bytes.replace(b"\t", b" ")
+                deck_path.write_bytes(deck_bytes)
 
             self._copy_includes(atp_text, acp_path.parent, stage_dir)
             self._copy_startup(Path(solver).parent, stage_dir)
@@ -134,10 +142,21 @@ class ATPRunner:
                 scored.append((score(data), name, data))
             scored.sort(key=lambda t: t[0], reverse=True)
             _, best_name, content = scored[0]
-        try:
-            text = content.decode("windows-1252")
-        except Exception:
-            text = content.decode("latin-1", errors="ignore")
+        text = None
+        # Detectar UTF-16 (muitos NULs alternados)
+        if content and content.count(b"\x00") > len(content) * 0.2:
+            try:
+                text = content.decode("utf-16le")
+            except Exception:
+                try:
+                    text = content.decode("utf-16be")
+                except Exception:
+                    text = None
+        if text is None:
+            try:
+                text = content.decode("windows-1252")
+            except Exception:
+                text = content.decode("latin-1", errors="ignore")
         return text, content, best_name
 
     def _safe_deck_name(self, stem: str) -> str:
@@ -184,6 +203,26 @@ class ATPRunner:
                     shutil.copy2(candidate, stage_dir / name)
                 except Exception:
                     pass
+
+    def _write_startup_override(self, stage_dir: Path) -> None:
+        startup_path = stage_dir / "startup"
+        try:
+            startup_path.write_text("NOTAB = 0\nUNIXON = 0\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    def _should_reencode(self, raw: bytes) -> bool:
+        if not raw:
+            return True
+        nul_ratio = raw.count(b"\x00") / max(1, len(raw))
+        if nul_ratio > 0.01:
+            return True
+        printable = 0
+        for b in raw:
+            if b in (9, 10, 13) or 32 <= b <= 126 or b >= 160:
+                printable += 1
+        printable_ratio = printable / len(raw)
+        return printable_ratio < 0.8
 
     def _build_command(self, solver: str, deck_name: str) -> List[str]:
         ext = Path(solver).suffix.lower()

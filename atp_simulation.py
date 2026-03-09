@@ -84,13 +84,19 @@ def run_atp_simulation(
         deck_text = _normalize_line_endings(atp_text)
         deck_path.write_text(deck_text, encoding="windows-1252", errors="ignore")
 
-        cmd = _build_command(solver, deck_path.name)
+        is_wrapper = _is_runatp_wrapper(solver)
+        deck_arg = str(deck_path) if is_wrapper else deck_path.name
+        run_cwd = Path(solver).parent if is_wrapper else stage_dir
+        search_dirs = [stage_dir, run_cwd, atp_path.parent, out_dir]
+        before_files = _snapshot_dirs(search_dirs)
+
+        cmd = _build_command(solver, deck_arg)
         log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
         _write_log(
             log_path,
             "running",
             cmd,
-            stage_dir,
+            run_cwd,
             None,
             "",
             "",
@@ -98,9 +104,9 @@ def run_atp_simulation(
             applied_params,
             warnings,
         )
-        stdout, stderr, returncode = _run_command(cmd, stage_dir, timeout_sec)
+        stdout, stderr, returncode = _run_command(cmd, run_cwd, timeout_sec)
 
-        lis_path = _pick_lis(stage_dir)
+        lis_path = _pick_lis(search_dirs, before_files, [deck_path.stem, atp_path.stem])
         moved_lis = None
         if lis_path and lis_path.exists() and lis_path.stat().st_size > 0:
             moved_lis = _move_preserve_name(lis_path, out_dir, timestamp)
@@ -113,7 +119,7 @@ def run_atp_simulation(
             log_path,
             status,
             cmd,
-            stage_dir,
+            run_cwd,
             moved_lis,
             stdout,
             stderr,
@@ -223,6 +229,10 @@ def _build_command(solver: str, deck_name: str) -> List[str]:
     return [solver, deck_name]
 
 
+def _is_runatp_wrapper(solver: str) -> bool:
+    return "runatp" in Path(solver).name.lower()
+
+
 def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str, Optional[int]]:
     stdout = ""
     stderr = ""
@@ -277,12 +287,42 @@ def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str,
     return stdout, stderr, returncode
 
 
-def _pick_lis(stage_dir: Path) -> Optional[Path]:
-    candidates = list(stage_dir.glob("*.lis")) + list(stage_dir.glob("*.LIS"))
+def _snapshot_dirs(dirs: List[Path]) -> Dict[str, set]:
+    snapshot: Dict[str, set] = {}
+    for d in dirs:
+        if d.exists() and d.is_dir():
+            try:
+                snapshot[str(d)] = set(p.name for p in d.iterdir() if p.is_file())
+            except Exception:
+                snapshot[str(d)] = set()
+    return snapshot
+
+
+def _pick_lis(search_dirs: List[Path], before_files: Dict[str, set], expected_stems: List[str]) -> Optional[Path]:
+    candidates: List[Path] = []
+    for d in search_dirs:
+        if d.exists() and d.is_dir():
+            candidates.extend(list(d.glob("*.lis")))
+            candidates.extend(list(d.glob("*.LIS")))
     if not candidates:
         return None
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
+
+    # Preferir arquivos novos e com stem esperado
+    expected = set(s.lower() for s in expected_stems)
+    scored: List[Tuple[int, float, Path]] = []
+    for p in candidates:
+        try:
+            is_new = 1 if p.name not in before_files.get(str(p.parent), set()) else 0
+            stem_match = 1 if p.stem.lower() in expected else 0
+            score = (is_new * 2) + stem_match
+            scored.append((score, p.stat().st_mtime, p))
+        except Exception:
+            continue
+
+    if not scored:
+        return None
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return scored[0][2]
 
 
 def _move_preserve_name(src: Path, dst_dir: Path, ts: str) -> Path:

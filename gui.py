@@ -119,9 +119,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.parallel_process_var = tk.BooleanVar(value=False)
 
         # Simulacao ATP (.atp)
-        self.atp_solver_var = tk.StringVar(value='')
         self.atp_file_var = tk.StringVar(value='')
-        self.atp_timeout_var = tk.IntVar(value=300)
         
         
         # Opções de visualização de gráficos
@@ -156,9 +154,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.save_logs_var.set(data.get('save_logs', True))
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
-                self.atp_solver_var.set(data.get('atp_solver', ''))
                 self.atp_file_var.set(data.get('atp_file', ''))
-                self.atp_timeout_var.set(int(data.get('atp_timeout', 300)))
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -185,9 +181,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'save_logs': self.save_logs_var.get(),
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
-                'atp_solver': self.atp_solver_var.get(),
                 'atp_file': self.atp_file_var.get(),
-                'atp_timeout': int(self.atp_timeout_var.get()),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -455,29 +449,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        exec_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        exec_card.pack(fill="x", pady=(0, 15))
-
-        ctk.CTkLabel(
-            exec_card,
-            text="Executavel ATP",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
-        ctk.CTkLabel(exec_card, text="Caminho para runATP.exe ou tpbig.exe:").pack(anchor="w", padx=15, pady=(5, 0))
-        exec_frame = ctk.CTkFrame(exec_card, fg_color="transparent")
-        exec_frame.pack(fill="x", padx=15, pady=(5, 15))
-
-        self.atp_exec_entry = ctk.CTkEntry(exec_frame, textvariable=self.atp_solver_var, width=900)
-        self.atp_exec_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        ctk.CTkButton(
-            exec_frame,
-            text="Escolher",
-            command=self._choose_atp_solver,
-            width=120
-        ).pack(side="left")
-
         atp_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         atp_card.pack(fill="x", pady=(0, 15))
 
@@ -501,33 +472,20 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=120
         ).pack(side="left")
 
-        params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        params_card.pack(fill="x", pady=(0, 15))
+        info_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        info_card.pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(
-            params_card,
-            text="Parametros (JSON)",
+            info_card,
+            text="Status da Integracao ATP",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
-        self.atp_params_text = ctk.CTkTextbox(params_card, width=1100, height=120)
-        self.atp_params_text.pack(fill="x", padx=15, pady=(0, 15))
-        self.atp_params_text.insert("1.0", "{\n  \"RPI\": 200\n}\n")
-
-        timeout_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        timeout_card.pack(fill="x", pady=(0, 15))
-
         ctk.CTkLabel(
-            timeout_card,
-            text="Timeout (s)",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
-        timeout_frame = ctk.CTkFrame(timeout_card, fg_color="transparent")
-        timeout_frame.pack(fill="x", padx=15, pady=(5, 15))
-
-        ctk.CTkLabel(timeout_frame, text="Tempo maximo de execucao:").pack(side="left", padx=(0, 10))
-        ctk.CTkEntry(timeout_frame, textvariable=self.atp_timeout_var, width=120).pack(side="left")
+            info_card,
+            text="A execucao do solver ATP foi desativada temporariamente para reimplementacao limpa.",
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 15))
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
@@ -543,7 +501,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkButton(
             buttons_frame,
-            text="Executar ATP",
+            text="Run Simulation",
             command=self._run_atp_simulation,
             width=200,
             height=40,
@@ -554,7 +512,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=160)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
-        self.simulation_results.insert("1.0", "Resultados da simulacao aparecerao aqui...\n")
+        self.simulation_results.insert("1.0", "ATP integration will be implemented in the next step.\n")
         self.simulation_results.configure(state="disabled")
     
     def _build_logs_tab(self):
@@ -634,16 +592,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         folder = filedialog.askdirectory(title="Escolher pasta de saída")
         if folder:
             self.outdir_var.set(folder)
-            self._save_prefs()
-
-    def _choose_atp_solver(self):
-        """Escolher executavel ATP"""
-        file = filedialog.askopenfilename(
-            title="Escolher executavel ATP",
-            filetypes=[("Executaveis", "*.exe *.bat *.cmd"), ("Todos", "*.*")]
-        )
-        if file:
-            self.atp_solver_var.set(file)
             self._save_prefs()
 
     def _choose_atp_file(self):
@@ -750,62 +698,25 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.configure(state="disabled")
 
     def _run_atp_simulation(self):
-        """Executar simulacao ATP usando .atp"""
-        solver_path = self.atp_solver_var.get()
-        atp_file = self.atp_file_var.get()
-        outdir = self.outdir_var.get()
-        timeout = int(self.atp_timeout_var.get() or 300)
-
-        if not solver_path:
-            messagebox.showerror("Erro", "Executavel ATP nao informado")
-            return
-
+        """Aciona o placeholder da integracao ATP."""
+        atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
             messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
             return
 
-        if not outdir:
-            messagebox.showerror("Erro", "Pasta de saida nao informada")
-            return
+        self.log("Placeholder de simulacao ATP acionado")
 
-        params_text = self.atp_params_text.get("1.0", "end").strip()
-        params = None
-        if params_text:
-            try:
-                params = json.loads(params_text)
-                if not isinstance(params, dict):
-                    raise ValueError("Parametros devem ser um objeto JSON")
-            except Exception as e:
-                messagebox.showerror("Erro", f"Parametros invalidos: {e}")
-                return
-
-        self.log("Iniciando simulacao ATP...")
-
-        def worker():
-            try:
-                result = run_atp_simulation(
-                    Path(atp_file),
-                    solver_path,
-                    params=params,
-                    output_dir=Path(outdir),
-                    timeout_sec=timeout,
-                )
-
-                if result.lis_path:
-                    self.log(f"Simulacao concluida: {result.lis_path}")
-                    self._update_simulation_results(
-                        f"Sucesso!\nArquivo .lis: {result.lis_path}\nLog: {result.log_path}"
-                    )
-                else:
-                    self.log("Simulacao falhou")
-                    self._update_simulation_results(
-                        f"Falha na simulacao. Log: {result.log_path}\nStatus: {result.status}"
-                    )
-            except Exception as e:
-                self.log(f"Erro: {e}")
-                self._update_simulation_results(f"Erro:\n{str(e)}")
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            run_atp_simulation(atp_file)
+        except NotImplementedError:
+            info_msg = "ATP integration will be implemented in the next step."
+            self.log(info_msg)
+            self._update_simulation_results(info_msg)
+            messagebox.showinfo("Integracao ATP", info_msg)
+        except Exception as e:
+            self.log(f"Erro inesperado no placeholder ATP: {e}")
+            self._update_simulation_results(f"Erro:\n{str(e)}")
+            messagebox.showerror("Erro", f"Falha no placeholder ATP:\n{e}")
 
     def _update_simulation_results(self, text: str):
         """Atualiza area de resultados da simulacao"""

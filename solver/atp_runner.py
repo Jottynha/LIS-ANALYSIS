@@ -22,6 +22,7 @@ def run_atp_solver(atp_file_path: str) -> str:
     atp_file_name = atp_path.name
     base_name = atp_path.stem
     lis_file_path = working_directory / f"{base_name}.lis"
+    lis_file_path_upper = working_directory / f"{base_name}.LIS"
 
     print("Running ATP simulation")
     print("ATP executable:", ATP_EXECUTABLE)
@@ -29,19 +30,26 @@ def run_atp_solver(atp_file_path: str) -> str:
     print("Working directory:", str(working_directory))
 
     start_time = time.time()
-    subprocess.run(
+    process = subprocess.Popen(
         [ATP_EXECUTABLE, atp_file_name],
         cwd=working_directory,
-        capture_output=True,
-        text=True,
     )
+    return_code = process.wait()
     end_time = time.time()
 
     execution_time = end_time - start_time
     print("ATP finished")
     print("Execution time:", execution_time)
 
-    if not lis_file_path.exists():
-        raise RuntimeError("ATP execution finished but the .lis file was not generated")
+    if lis_file_path.exists():
+        return str(lis_file_path)
 
-    return str(lis_file_path)
+    if lis_file_path_upper.exists():
+        return str(lis_file_path_upper)
+
+    if return_code != 0:
+        raise RuntimeError(
+            f"ATP execution failed with return code {return_code} and .lis file was not generated"
+        )
+
+    raise RuntimeError("ATP execution finished but the .lis file was not generated")

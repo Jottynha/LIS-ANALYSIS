@@ -1,7 +1,6 @@
 import threading
 import traceback
 import json
-import queue
 import sys
 import os
 import subprocess
@@ -123,8 +122,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Estado da execucao ATP
         self._atp_running = False
         self._atp_started_at = None
-        self._atp_worker_thread = None
-        self._atp_result_queue = None
         self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
 
         # Simulacao ATP (.atp)
@@ -736,42 +733,27 @@ class ModernLisAnalysisApp(ctk.CTk):
         def worker():
             try:
                 lis_path = run_atp_solver(atp_file)
-                self._atp_result_queue.put(("success", lis_path))
+                self.after(0, lambda: self._on_atp_simulation_finished(True, lis_path))
             except Exception as e:
-                self._atp_result_queue.put(("error", str(e)))
+                self.after(0, lambda: self._on_atp_simulation_finished(False, str(e)))
 
-        self._atp_result_queue = queue.Queue()
-        self._atp_worker_thread = threading.Thread(target=worker, daemon=True)
-        self._atp_worker_thread.start()
-        self.after(100, self._poll_atp_worker_result)
+        threading.Thread(target=worker, daemon=True).start()
 
-    def _poll_atp_worker_result(self):
-        """Faz polling do resultado do worker ATP no thread principal."""
-        if not self._atp_running or self._atp_result_queue is None:
-            return
+    def _on_atp_simulation_finished(self, success: bool, payload: str):
+        """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
+        elapsed = self._set_atp_feedback_finished(success=success)
 
-        try:
-            result_type, payload = self._atp_result_queue.get_nowait()
-        except queue.Empty:
-            if self._atp_worker_thread is not None and self._atp_worker_thread.is_alive():
-                self.after(100, self._poll_atp_worker_result)
-                return
-
-            # Worker terminou sem publicar resultado (falha inesperada)
-            result_type, payload = "error", "Falha inesperada: worker ATP finalizou sem resultado."
-
-        elapsed = self._set_atp_feedback_finished(success=(result_type == "success"))
-        self.status_var.set("Pronto")
-
-        if result_type == "success":
+        if success:
             lis_path = payload
+            self.status_var.set("Simulation completed")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
             self._update_simulation_results(
                 f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}"
             )
             messagebox.showinfo("Sucesso", f"Simulacao concluida em {elapsed:.1f}s.\n\nLIS file:\n{lis_path}")
         else:
-            error_msg = str(payload)
+            self.status_var.set("Pronto")
+            error_msg = payload
             self.log(f"Erro na simulacao ATP: {error_msg}")
             self._update_simulation_results(
                 f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"

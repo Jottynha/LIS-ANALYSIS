@@ -4,6 +4,7 @@ import json
 import sys
 import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -117,6 +118,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.save_logs_var = tk.BooleanVar(value=True)
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
+
+        # Estado da execucao ATP
+        self._atp_running = False
+        self._atp_started_at = None
+        self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
@@ -499,7 +505,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         buttons_frame = ctk.CTkFrame(action_card, fg_color="transparent")
         buttons_frame.pack(padx=15, pady=(0, 15))
 
-        ctk.CTkButton(
+        self.atp_run_button = ctk.CTkButton(
             buttons_frame,
             text="Run Simulation",
             command=self._run_atp_simulation,
@@ -508,7 +514,18 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#2196F3",
             hover_color="#1976D2"
-        ).pack(side="left", padx=5)
+        )
+        self.atp_run_button.pack(side="left", padx=5)
+
+        self.atp_progress = ctk.CTkProgressBar(action_card, mode="indeterminate")
+        self.atp_progress.pack(fill="x", padx=15, pady=(0, 8))
+        self.atp_progress.stop()
+
+        ctk.CTkLabel(
+            action_card,
+            textvariable=self.atp_run_status_var,
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", padx=15, pady=(0, 12))
 
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=160)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
@@ -699,11 +716,16 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _run_atp_simulation(self):
         """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
+        if self._atp_running:
+            messagebox.showinfo("Simulacao ATP", "Ja existe uma simulacao ATP em andamento.")
+            return
+
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
             messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
             return
 
+        self._set_atp_feedback_running()
         self.status_var.set("Executando simulacao ATP...")
         self.log(f"Iniciando simulacao ATP para: {atp_file}")
         self._update_simulation_results("Executando simulacao ATP... aguarde a conclusao do solver.\n")
@@ -713,26 +735,67 @@ class ModernLisAnalysisApp(ctk.CTk):
                 lis_path = run_atp_solver(atp_file)
 
                 def on_success():
+                    elapsed = self._set_atp_feedback_finished(success=True)
                     self.status_var.set("Pronto")
                     self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
                     self._update_simulation_results(
-                        f"Simulation completed\nLIS file: {lis_path}"
+                        f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}"
                     )
-                    messagebox.showinfo("Sucesso", f"Simulacao concluida.\n\nLIS file:\n{lis_path}")
+                    messagebox.showinfo("Sucesso", f"Simulacao concluida em {elapsed:.1f}s.\n\nLIS file:\n{lis_path}")
 
                 self.after(0, on_success)
             except Exception as e:
                 error_msg = str(e)
 
                 def on_error():
+                    elapsed = self._set_atp_feedback_finished(success=False)
                     self.status_var.set("Pronto")
                     self.log(f"Erro na simulacao ATP: {error_msg}")
-                    self._update_simulation_results(f"Erro na simulacao ATP:\n{error_msg}")
-                    messagebox.showerror("Erro", f"Falha na simulacao ATP:\n{error_msg}")
+                    self._update_simulation_results(
+                        f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
+                    )
+                    messagebox.showerror("Erro", f"Falha na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}")
 
                 self.after(0, on_error)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _set_atp_feedback_running(self):
+        """Ativa indicadores visuais de simulacao ATP em andamento."""
+        self._atp_running = True
+        self._atp_started_at = time.time()
+        self.atp_run_button.configure(state="disabled", text="Executando...")
+        self.atp_progress.start()
+        self.atp_run_status_var.set("Status: executando (0s)")
+        self._tick_atp_running_status()
+
+    def _set_atp_feedback_finished(self, success: bool) -> float:
+        """Desativa indicadores visuais e retorna tempo decorrido."""
+        elapsed = 0.0
+        if self._atp_started_at is not None:
+            elapsed = time.time() - self._atp_started_at
+
+        self._atp_running = False
+        self._atp_started_at = None
+        self.atp_progress.stop()
+        self.atp_progress.set(0)
+        self.atp_run_button.configure(state="normal", text="Run Simulation")
+
+        if success:
+            self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
+        else:
+            self.atp_run_status_var.set(f"Status: erro ({elapsed:.1f}s)")
+
+        return elapsed
+
+    def _tick_atp_running_status(self):
+        """Atualiza o status de tempo da execucao ATP a cada segundo."""
+        if not self._atp_running or self._atp_started_at is None:
+            return
+
+        elapsed = int(time.time() - self._atp_started_at)
+        self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")
+        self.after(1000, self._tick_atp_running_status)
 
     def _update_simulation_results(self, text: str):
         """Atualiza area de resultados da simulacao"""

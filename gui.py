@@ -30,7 +30,7 @@ try:
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
-    from atp_simulation import run_atp_simulation
+    from solver.atp_runner import run_atp_solver
     from control_detector import (
         ControlDetector,
         FileControlInfo,
@@ -483,7 +483,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             info_card,
-            text="A execucao do solver ATP foi desativada temporariamente para reimplementacao limpa.",
+            text="A simulacao usa runATP.exe no mesmo diretorio do arquivo .atp e aguarda o termino da execucao.",
             justify="left"
         ).pack(anchor="w", padx=15, pady=(0, 15))
 
@@ -512,7 +512,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=160)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
-        self.simulation_results.insert("1.0", "ATP integration will be implemented in the next step.\n")
+        self.simulation_results.insert("1.0", "Aguardando execucao da simulacao ATP...\n")
         self.simulation_results.configure(state="disabled")
     
     def _build_logs_tab(self):
@@ -698,25 +698,41 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.configure(state="disabled")
 
     def _run_atp_simulation(self):
-        """Aciona o placeholder da integracao ATP."""
+        """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
             messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
             return
 
-        self.log("Placeholder de simulacao ATP acionado")
+        self.status_var.set("Executando simulacao ATP...")
+        self.log(f"Iniciando simulacao ATP para: {atp_file}")
+        self._update_simulation_results("Executando simulacao ATP... aguarde a conclusao do solver.\n")
 
-        try:
-            run_atp_simulation(atp_file)
-        except NotImplementedError:
-            info_msg = "ATP integration will be implemented in the next step."
-            self.log(info_msg)
-            self._update_simulation_results(info_msg)
-            messagebox.showinfo("Integracao ATP", info_msg)
-        except Exception as e:
-            self.log(f"Erro inesperado no placeholder ATP: {e}")
-            self._update_simulation_results(f"Erro:\n{str(e)}")
-            messagebox.showerror("Erro", f"Falha no placeholder ATP:\n{e}")
+        def worker():
+            try:
+                lis_path = run_atp_solver(atp_file)
+
+                def on_success():
+                    self.status_var.set("Pronto")
+                    self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
+                    self._update_simulation_results(
+                        f"Simulation completed\nLIS file: {lis_path}"
+                    )
+                    messagebox.showinfo("Sucesso", f"Simulacao concluida.\n\nLIS file:\n{lis_path}")
+
+                self.after(0, on_success)
+            except Exception as e:
+                error_msg = str(e)
+
+                def on_error():
+                    self.status_var.set("Pronto")
+                    self.log(f"Erro na simulacao ATP: {error_msg}")
+                    self._update_simulation_results(f"Erro na simulacao ATP:\n{error_msg}")
+                    messagebox.showerror("Erro", f"Falha na simulacao ATP:\n{error_msg}")
+
+                self.after(0, on_error)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _update_simulation_results(self, text: str):
         """Atualiza area de resultados da simulacao"""

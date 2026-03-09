@@ -78,6 +78,9 @@ def run_atp_simulation(
     log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
     stage_dir = Path(tempfile.mkdtemp(prefix="atp_stage_"))
     try:
+        stdout = ""
+        stderr = ""
+        returncode: Optional[int] = None
         deck_name = _safe_deck_name(atp_path.stem) + atp_path.suffix
         deck_path = stage_dir / deck_name
 
@@ -107,41 +110,84 @@ def run_atp_simulation(
             warnings,
         )
 
-        stdout, stderr, returncode = _run_command(cmd, run_cwd, timeout_sec)
+        try:
+            stdout, stderr, returncode = _run_command(cmd, run_cwd, timeout_sec)
 
-        # 4) Confirma geracao do .lis no staging
-        lis_path = _pick_lis(run_cwd)
-        moved_lis = None
-        if lis_path and lis_path.exists() and lis_path.stat().st_size > 0:
+            # 4) Confirma geracao do .lis no staging (arquivo esperado)
+            expected_lis = run_cwd / deck_name.replace(".atp", ".lis")
+            expected_lis_upper = run_cwd / deck_name.replace(".atp", ".LIS")
+            lis_path = None
+            if expected_lis.exists() and expected_lis.stat().st_size > 0:
+                lis_path = expected_lis
+            elif expected_lis_upper.exists() and expected_lis_upper.stat().st_size > 0:
+                lis_path = expected_lis_upper
+            else:
+                lis_path = _pick_lis(run_cwd)
+
+            if lis_path is None or (not lis_path.exists()):
+                raise RuntimeError("ATP finalizou mas .lis nao foi gerado")
+
             moved_lis = _move_preserve_name(lis_path, out_dir, timestamp)
 
-        status = "success" if moved_lis else "no_lis"
-        if returncode not in (0, None):
-            status = "error_with_lis" if moved_lis else "error"
+            status = "success"
+            if returncode not in (0, None):
+                status = "error_with_lis"
 
-        _write_log(
-            log_path,
-            status,
-            cmd,
-            run_cwd,
-            moved_lis,
-            stdout,
-            stderr,
-            returncode,
-            applied_params,
-            warnings,
-        )
+            _write_log(
+                log_path,
+                status,
+                cmd,
+                run_cwd,
+                moved_lis,
+                stdout,
+                stderr,
+                returncode,
+                applied_params,
+                warnings,
+            )
 
-        return ATPSimulationResult(
-            status=status,
-            lis_path=moved_lis,
-            log_path=log_path,
-            returncode=returncode,
-            stdout=stdout,
-            stderr=stderr,
-            applied_params=applied_params,
-            warnings=warnings,
-        )
+            return ATPSimulationResult(
+                status=status,
+                lis_path=moved_lis,
+                log_path=log_path,
+                returncode=returncode,
+                stdout=stdout,
+                stderr=stderr,
+                applied_params=applied_params,
+                warnings=warnings,
+            )
+        except Exception as e:
+            err_msg = str(e)
+            if stderr:
+                stderr = f"{stderr}\n{err_msg}"
+            else:
+                stderr = err_msg
+            if returncode is None:
+                returncode = -1
+
+            _write_log(
+                log_path,
+                "error",
+                cmd,
+                run_cwd,
+                None,
+                stdout,
+                stderr,
+                returncode,
+                applied_params,
+                warnings,
+            )
+
+            return _result_error(
+                "error",
+                None,
+                log_path,
+                returncode,
+                stdout,
+                stderr,
+                applied_params,
+                warnings,
+            )
     finally:
         # 5) Limpeza segura do staging sem quebrar a aplicacao
         shutil.rmtree(stage_dir, ignore_errors=True)

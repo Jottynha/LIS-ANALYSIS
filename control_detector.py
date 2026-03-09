@@ -1,6 +1,6 @@
 """
-Detector e parser de parâmetros de controle em nomes de arquivos ATP.
-Identifica RPI, RF e outros parâmetros e permite modificação dinâmica.
+Detector e parser de parametros de controle em nomes de arquivos ATP.
+Identifica RPI, RF e outros parametros e permite modificacao dinamica.
 """
 
 import re
@@ -81,7 +81,7 @@ class ControlDetector:
         Detecta parâmetros de controle a partir do nome do arquivo.
         
         Args:
-            file_path: Caminho do arquivo .lis ou .acp
+            file_path: Caminho do arquivo .lis
             
         Returns:
             FileControlInfo com todos os parâmetros detectados
@@ -196,7 +196,7 @@ class ControlDetector:
         return [current_value]
 
 
-def analyze_workspace_files(folder: Path, extensions: List[str] = ['.lis', '.acp']) -> Dict[str, List[FileControlInfo]]:
+def analyze_workspace_files(folder: Path, extensions: List[str] = ['.lis']) -> Dict[str, List[FileControlInfo]]:
     """
     Analisa todos os arquivos de uma pasta e organiza por tipo de controle.
     
@@ -248,7 +248,7 @@ if __name__ == "__main__":
         "Caso0_ReEnergizacao_Convenc_RPI=100 e RF=30.LIS",
         "Caso0_ReEnergizacao_Convenc_SemControle.LIS",
         "Caso0_ReEnergizacao_OTIMIZADA_RPI=500 e RF=30.lis",
-        "Caso0_Convenc_SemControle.acp",
+        # TODO: adicionar testes com .atp quando a integracao ATP for reescrita
         "Simulacao_RCRIT=50_TCRIT=0.01.lis"
     ]
     

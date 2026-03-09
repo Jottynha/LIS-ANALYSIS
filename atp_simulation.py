@@ -85,6 +85,19 @@ def run_atp_simulation(
         deck_path.write_text(deck_text, encoding="windows-1252", errors="ignore")
 
         cmd = _build_command(solver, deck_path.name)
+        log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
+        _write_log(
+            log_path,
+            "running",
+            cmd,
+            stage_dir,
+            None,
+            "",
+            "",
+            None,
+            applied_params,
+            warnings,
+        )
         stdout, stderr, returncode = _run_command(cmd, stage_dir, timeout_sec)
 
         lis_path = _pick_lis(stage_dir)
@@ -96,7 +109,6 @@ def run_atp_simulation(
         if returncode not in (0, None):
             status = "error_with_lis" if moved_lis else "error"
 
-        log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
         _write_log(
             log_path,
             status,
@@ -215,6 +227,7 @@ def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str,
     stdout = ""
     stderr = ""
     returncode = None
+    proc = None
     try:
         if os.name == "nt":
             proc = subprocess.Popen(
@@ -240,6 +253,22 @@ def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str,
         stdout, stderr = proc.communicate(input=("go\n" * 3), timeout=timeout_sec)
         returncode = proc.returncode
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            try:
+                if os.name == "nt":
+                    subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                else:
+                    import os as _os
+                    import signal as _signal
+
+                    _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+            except Exception:
+                pass
         returncode = -9
         stderr = (stderr or "") + "\n[timeout] Processo excedeu o tempo limite."
     except Exception as e:

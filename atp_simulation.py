@@ -7,7 +7,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -76,22 +75,25 @@ def run_atp_simulation(
         atp_text, applied_params, warnings = _apply_params(atp_text, params)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
     stage_dir = Path(tempfile.mkdtemp(prefix="atp_stage_"))
     try:
         deck_name = _safe_deck_name(atp_path.stem) + atp_path.suffix
         deck_path = stage_dir / deck_name
 
-        deck_text = _normalize_line_endings(atp_text)
-        deck_path.write_text(deck_text, encoding="windows-1252", errors="ignore")
+        # 1) Copia o .atp base para o staging
+        shutil.copy2(atp_path, deck_path)
 
-        is_wrapper = _is_runatp_wrapper(solver)
-        deck_arg = str(deck_path) if is_wrapper else deck_path.name
-        run_cwd = Path(solver).parent if is_wrapper else stage_dir
-        search_dirs = [stage_dir, run_cwd, atp_path.parent, out_dir]
-        before_files = _snapshot_dirs(search_dirs)
+        # 2) Aplica modificacoes de parametros no deck do staging
+        if params:
+            deck_text = _normalize_line_endings(atp_text)
+            deck_path.write_text(deck_text, encoding="windows-1252", errors="ignore")
 
-        cmd = _build_command(solver, deck_arg)
-        log_path = logs_dir / f"{atp_path.stem}_{timestamp}.log"
+        # 3) Executa solver no diretório do .atp (staging)
+        run_cwd = stage_dir
+        cmd = _build_command(solver, deck_path.name)
+
+        # Log inicial com comando e cwd
         _write_log(
             log_path,
             "running",
@@ -104,9 +106,11 @@ def run_atp_simulation(
             applied_params,
             warnings,
         )
+
         stdout, stderr, returncode = _run_command(cmd, run_cwd, timeout_sec)
 
-        lis_path = _pick_lis(search_dirs, before_files, [deck_path.stem, atp_path.stem])
+        # 4) Confirma geracao do .lis no staging
+        lis_path = _pick_lis(run_cwd)
         moved_lis = None
         if lis_path and lis_path.exists() and lis_path.stat().st_size > 0:
             moved_lis = _move_preserve_name(lis_path, out_dir, timestamp)
@@ -139,14 +143,8 @@ def run_atp_simulation(
             warnings=warnings,
         )
     finally:
-        for _ in range(3):
-            try:
-                shutil.rmtree(stage_dir, ignore_errors=False)
-                break
-            except Exception:
-                time.sleep(0.5)
-        else:
-            warnings.append(f"Staging nao removido: {stage_dir}")
+        # 5) Limpeza segura do staging sem quebrar a aplicacao
+        shutil.rmtree(stage_dir, ignore_errors=True)
 
 
 def _apply_params(atp_text: str, params: Dict[str, Any]) -> Tuple[str, Dict[str, int], List[str]]:
@@ -215,7 +213,7 @@ def _normalize_line_endings(text: str) -> str:
 
 
 def _safe_deck_name(stem: str) -> str:
-    return re.sub(r"[=\\s]+", "_", stem)
+    return re.sub(r"[=\s]+", "_", stem)
 
 
 def _build_command(solver: str, deck_name: str) -> List[str]:
@@ -229,57 +227,26 @@ def _build_command(solver: str, deck_name: str) -> List[str]:
     return [solver, deck_name]
 
 
-def _is_runatp_wrapper(solver: str) -> bool:
-    return "runatp" in Path(solver).name.lower()
-
-
 def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str, Optional[int]]:
     stdout = ""
     stderr = ""
     returncode = None
-    proc = None
     try:
-        if os.name == "nt":
-            proc = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-                text=True,
-            )
-        else:
-            import os as _os
-
-            proc = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-                text=True,
-                preexec_fn=_os.setsid,
-            )
-        stdout, stderr = proc.communicate(input=("go\n" * 3), timeout=timeout_sec)
-        returncode = proc.returncode
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            input=("go\n" * 3),
+            check=False,
+        )
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        returncode = result.returncode
     except subprocess.TimeoutExpired:
-        if proc is not None:
-            try:
-                if os.name == "nt":
-                    subprocess.run(
-                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                    )
-                else:
-                    import os as _os
-                    import signal as _signal
-
-                    _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
-            except Exception:
-                pass
         returncode = -9
+        stdout = ""
         stderr = (stderr or "") + "\n[timeout] Processo excedeu o tempo limite."
     except Exception as e:
         returncode = -1
@@ -287,42 +254,12 @@ def _run_command(cmd: List[str], cwd: Path, timeout_sec: int) -> Tuple[str, str,
     return stdout, stderr, returncode
 
 
-def _snapshot_dirs(dirs: List[Path]) -> Dict[str, set]:
-    snapshot: Dict[str, set] = {}
-    for d in dirs:
-        if d.exists() and d.is_dir():
-            try:
-                snapshot[str(d)] = set(p.name for p in d.iterdir() if p.is_file())
-            except Exception:
-                snapshot[str(d)] = set()
-    return snapshot
-
-
-def _pick_lis(search_dirs: List[Path], before_files: Dict[str, set], expected_stems: List[str]) -> Optional[Path]:
-    candidates: List[Path] = []
-    for d in search_dirs:
-        if d.exists() and d.is_dir():
-            candidates.extend(list(d.glob("*.lis")))
-            candidates.extend(list(d.glob("*.LIS")))
+def _pick_lis(stage_dir: Path) -> Optional[Path]:
+    candidates = list(stage_dir.glob("*.lis")) + list(stage_dir.glob("*.LIS"))
     if not candidates:
         return None
-
-    # Preferir arquivos novos e com stem esperado
-    expected = set(s.lower() for s in expected_stems)
-    scored: List[Tuple[int, float, Path]] = []
-    for p in candidates:
-        try:
-            is_new = 1 if p.name not in before_files.get(str(p.parent), set()) else 0
-            stem_match = 1 if p.stem.lower() in expected else 0
-            score = (is_new * 2) + stem_match
-            scored.append((score, p.stat().st_mtime, p))
-        except Exception:
-            continue
-
-    if not scored:
-        return None
-    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return scored[0][2]
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
 
 
 def _move_preserve_name(src: Path, dst_dir: Path, ts: str) -> Path:

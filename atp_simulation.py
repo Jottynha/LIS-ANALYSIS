@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -75,8 +76,8 @@ def run_atp_simulation(
         atp_text, applied_params, warnings = _apply_params(atp_text, params)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    with tempfile.TemporaryDirectory(prefix="atp_stage_") as tmpdir:
-        stage_dir = Path(tmpdir)
+    stage_dir = Path(tempfile.mkdtemp(prefix="atp_stage_"))
+    try:
         deck_name = _safe_deck_name(atp_path.stem) + atp_path.suffix
         deck_path = stage_dir / deck_name
 
@@ -119,6 +120,15 @@ def run_atp_simulation(
             applied_params=applied_params,
             warnings=warnings,
         )
+    finally:
+        for _ in range(3):
+            try:
+                shutil.rmtree(stage_dir, ignore_errors=False)
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            warnings.append(f"Staging nao removido: {stage_dir}")
 
 
 def _apply_params(atp_text: str, params: Dict[str, Any]) -> Tuple[str, Dict[str, int], List[str]]:

@@ -9,26 +9,18 @@ ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
 
 def run_atp_solver(atp_file_path: str, timeout: int = 600) -> str:
     """
-    Executa o solver ATP via runATP.exe.
+    Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
 
-    Fluxo:
-    1. Executa runATP.exe
-    2. Espera o .lis aparecer
-    3. Espera o .lis parar de crescer
-    4. Verifica se a simulação terminou corretamente
-
-    Args:
-        atp_file_path: caminho para o arquivo .atp
-        timeout: tempo máximo total (segundos)
-
-    Returns:
-        Caminho para o arquivo .lis gerado
+    Detecção de término:
+    - espera o .lis aparecer
+    - monitora o final do .lis
+    - detecta 'TOTAL ELAPSED TIME' ou 'JOB COMPLETED'
     """
 
     atp_path = Path(atp_file_path)
 
     if not atp_path.exists():
-        raise FileNotFoundError(f"Arquivo .atp não encontrado: {atp_file_path}")
+        raise FileNotFoundError(f"Arquivo .atp nao encontrado: {atp_file_path}")
 
     working_directory = atp_path.parent
     atp_name = atp_path.name
@@ -38,30 +30,24 @@ def run_atp_solver(atp_file_path: str, timeout: int = 600) -> str:
     lis_upper = working_directory / f"{base_name}.LIS"
 
     print("\n===== ATP SIMULATION START =====")
-    print("Executable:", ATP_EXECUTABLE)
-    print("Input file:", atp_path)
+    print("ATP executable:", ATP_EXECUTABLE)
+    print("ATP input:", atp_path)
     print("Working directory:", working_directory)
 
     start_time = time.time()
 
-    # -------------------------
-    # Executa runATP
-    # -------------------------
-
-    process = subprocess.Popen(
+    # executa runATP
+    subprocess.Popen(
         [ATP_EXECUTABLE, atp_name],
         cwd=working_directory,
     )
 
-    process.wait()
+    print("Solver iniciado, aguardando .lis...")
 
-    print("runATP.exe terminou. Aguardando geração do .lis...")
-
-    # -------------------------
-    # Esperar .lis aparecer
-    # -------------------------
-
+    # esperar .lis aparecer
+    lis_path = None
     while True:
+
         if lis_lower.exists():
             lis_path = lis_lower
             break
@@ -71,59 +57,42 @@ def run_atp_solver(atp_file_path: str, timeout: int = 600) -> str:
             break
 
         if time.time() - start_time > timeout:
-            raise TimeoutError("Timeout: arquivo .lis não foi gerado")
+            raise TimeoutError("Timeout aguardando geracao do .lis")
 
         time.sleep(0.5)
 
     print("LIS detectado:", lis_path)
 
-    # -------------------------
-    # Esperar arquivo parar de crescer
-    # -------------------------
+    # monitorar final da simulação
+    print("Monitorando final da simulacao...")
 
-    print("Aguardando finalização da escrita do .lis...")
-
-    last_size = -1
-    stable_checks = 0
-
-    while stable_checks < 3:
-        current_size = lis_path.stat().st_size
-
-        if current_size == last_size:
-            stable_checks += 1
-        else:
-            stable_checks = 0
-
-        last_size = current_size
-        time.sleep(1)
+    while True:
 
         if time.time() - start_time > timeout:
-            raise TimeoutError("Timeout aguardando finalização do .lis")
+            raise TimeoutError("Timeout aguardando final da simulacao")
 
-    print("Arquivo .lis finalizado")
+        try:
+            with lis_path.open("rb") as f:
 
-    # -------------------------
-    # Verificar se simulação terminou corretamente
-    # -------------------------
+                f.seek(0, 2)
+                size = f.tell()
 
-    print("Verificando status da simulação...")
+                read_size = min(2000, size)
 
-    try:
-        with lis_path.open("r", errors="ignore") as f:
-            tail = f.readlines()[-50:]  # últimas linhas
-    except Exception:
-        tail = []
+                f.seek(-read_size, 2)
+                tail = f.read().decode(errors="ignore")
 
-    text_tail = "".join(tail)
+            if "TOTAL ELAPSED TIME" in tail or "JOB COMPLETED" in tail:
+                break
 
-    if "TOTAL ELAPSED TIME" in text_tail or "Job completed" in text_tail:
-        print("Simulação finalizada com sucesso")
-    else:
-        print("Aviso: fim da simulação não confirmado no .lis")
+        except Exception:
+            pass
 
-    end_time = time.time()
-    elapsed = end_time - start_time
+        time.sleep(1)
 
+    elapsed = time.time() - start_time
+
+    print("Simulacao concluida")
     print(f"Tempo total: {elapsed:.2f} s")
     print("===== ATP SIMULATION END =====\n")
 

@@ -5,6 +5,7 @@ import sys
 import os
 import subprocess
 import time
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -782,6 +783,10 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _set_atp_feedback_running(self):
         """Ativa indicadores visuais de simulacao ATP em andamento."""
+        # Reset explicito para nova simulacao (evita manter 100% da execucao anterior).
+        self._atp_running = False
+        self._set_atp_progress(0.0)
+
         self._atp_running = True
         self._atp_started_at = time.time()
         self._set_atp_progress(0.02)
@@ -815,9 +820,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         if not self._atp_running or self._atp_started_at is None:
             return
 
-        elapsed = int(time.time() - self._atp_started_at)
-        # Avanco temporal suave ate ~85% enquanto o processo roda.
-        timed_progress = min(0.85, 0.05 + (elapsed / float(self._atp_timeout_sec)) * 0.80)
+        elapsed_float = time.time() - self._atp_started_at
+        elapsed = int(elapsed_float)
+        # Avanco mais responsivo: cresce rapido no inicio e desacelera ate ~85%.
+        # Isso acompanha melhor o tempo real perceptivel sem depender de duracao total exata.
+        timed_progress = 0.05 + 0.80 * (1.0 - math.exp(-elapsed_float / 45.0))
+        timed_progress = min(0.85, timed_progress)
         self._set_atp_progress(timed_progress)
         self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")
         self.after(1000, self._tick_atp_running_status)

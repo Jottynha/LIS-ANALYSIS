@@ -728,18 +728,92 @@ class ModernLisAnalysisApp(ctk.CTk):
             messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
             return
 
+        outdir_str = self.outdir_var.get().strip()
+        if not outdir_str:
+            messagebox.showerror("Erro", "Pasta de saida nao informada")
+            return
+
+        show_plots = self.show_plots_var.get()
+        hide_errors = self.hide_errors_var.get()
+
         self._set_atp_feedback_running()
         self.status_var.set("Executando simulacao ATP...")
         self.log(f"Iniciando simulacao ATP para: {atp_file}")
-        self._update_simulation_results("Executando simulacao ATP... aguarde a conclusao do solver.\n")
+        self._update_simulation_results("Executando simulacao ATP e pos-processamento... aguarde.\n")
 
         def worker():
             def report_progress(message: str):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
             try:
-                lis_path = run_atp_solver(atp_file, status_callback=report_progress)
-                self.after(0, lambda: self._on_atp_simulation_finished(True, lis_path))
+                import shutil
+
+                report_progress("Running ATP solver...")
+                generated_lis_path = Path(run_atp_solver(atp_file, status_callback=report_progress))
+
+                report_progress("Preparing output folder...")
+                base_outdir = Path(outdir_str)
+                base_outdir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                sim_outdir = base_outdir / timestamp
+                sim_outdir.mkdir(parents=True, exist_ok=True)
+
+                lis_target = sim_outdir / generated_lis_path.name
+                if lis_target.exists():
+                    lis_target = sim_outdir / f"{generated_lis_path.stem}_{timestamp}{generated_lis_path.suffix}"
+
+                try:
+                    if generated_lis_path.resolve() != lis_target.resolve():
+                        lis_target = Path(shutil.move(str(generated_lis_path), str(lis_target)))
+                except Exception:
+                    # Se mover falhar, segue com o .lis no caminho original.
+                    lis_target = generated_lis_path
+
+                report_progress("Parsing LIS and generating tables...")
+                df, stats_lines, summary = parse_lis_table(lis_target)
+                if df is None:
+                    raise RuntimeError("Tabela alvo nao encontrada no .lis gerado")
+
+                excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
+                save_df_to_excel_only(df, excel_path)
+
+                try:
+                    computed_stats = calcular_estatisticas_do_df(df)
+                    escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
+                except Exception as e:
+                    if not hide_errors:
+                        report_progress(f"Warning: falha em estatisticas: {e}")
+
+                report_progress("Generating chart from analyzed data...")
+                criar_grafico_a_partir_do_excel(
+                    excel_path,
+                    sim_outdir,
+                    sim_index=1,
+                    salvar_png=True,
+                    mostrar=show_plots,
+                )
+
+                report_progress("Processing time series...")
+                try:
+                    time_series_df = parse_lis_time_series(lis_target)
+                    if time_series_df is not None:
+                        save_time_series_to_excel(time_series_df, excel_path)
+                        criar_grafico_series_temporais(
+                            time_series_df,
+                            sim_outdir / f"series_temporais_{lis_target.stem}.png",
+                            lis_name=lis_target.name,
+                            mostrar=show_plots,
+                        )
+                except Exception as e:
+                    if not hide_errors:
+                        report_progress(f"Warning: falha em series temporais: {e}")
+
+                payload = {
+                    "lis_path": str(lis_target),
+                    "outdir": str(sim_outdir),
+                    "excel_path": str(excel_path),
+                }
+                self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
@@ -760,21 +834,41 @@ class ModernLisAnalysisApp(ctk.CTk):
         elif "lis ready" in text:
             self._set_atp_progress(0.98)
 
-    def _on_atp_simulation_finished(self, success: bool, payload: str):
+    def _on_atp_simulation_finished(self, success: bool, payload):
         """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
         elapsed = self._set_atp_feedback_finished(success=success)
 
         if success:
-            lis_path = payload
+            lis_path = payload["lis_path"] if isinstance(payload, dict) else str(payload)
+            outdir = payload.get("outdir") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
+            if outdir:
+                self.log(f"Resultados da analise salvos em: {outdir}")
+
             self._update_simulation_results(
-                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}"
+                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}"
             )
-            messagebox.showinfo("Sucesso", f"Simulacao concluida em {elapsed:.1f}s.\n\nLIS file:\n{lis_path}")
+
+            if self.save_logs_var.get() and outdir:
+                try:
+                    log_file = Path(outdir) / f"log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+                    log_content = self.log_textbox.get("1.0", "end")
+                    log_file.write_text(log_content, encoding="utf-8")
+                    self.log(f"Log salvo: {log_file.name}")
+                except Exception as e:
+                    self.log(f"Aviso: nao foi possivel salvar log da simulacao ATP: {e}")
+
+            if self.open_output_var.get() and outdir:
+                _open_in_file_manager(Path(outdir))
+
+            messagebox.showinfo(
+                "Sucesso",
+                f"Simulacao concluida em {elapsed:.1f}s.\n\nLIS file:\n{lis_path}\n\nResultados:\n{outdir if outdir else '(nao informado)'}"
+            )
         else:
             self.status_var.set("Pronto")
-            error_msg = payload
+            error_msg = str(payload)
             self.log(f"Erro na simulacao ATP: {error_msg}")
             self._update_simulation_results(
                 f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"

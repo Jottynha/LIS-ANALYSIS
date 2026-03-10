@@ -26,7 +26,6 @@ try:
         save_df_to_excel_only,
         calcular_estatisticas_do_df,
         escrever_estatisticas_excel,
-        criar_grafico_a_partir_do_excel,
         criar_grafico_comparativo,
         parse_lis_time_series,
         save_time_series_to_excel,
@@ -735,6 +734,14 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         show_plots = self.show_plots_var.get()
         hide_errors = self.hide_errors_var.get()
+        only_comparative = self.only_comparative_var.get()
+        plot_options = {
+            'show_bars': self.plot_bars_var.get(),
+            'show_points': self.plot_points_var.get(),
+            'show_gaussian': self.plot_gaussian_var.get(),
+            'show_cumulative': self.plot_cumulative_var.get(),
+            'show_stats_box': self.plot_stats_box_var.get(),
+        }
 
         self._set_atp_feedback_running()
         self.status_var.set("Executando simulacao ATP...")
@@ -784,14 +791,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                     if not hide_errors:
                         report_progress(f"Warning: falha em estatisticas: {e}")
 
-                report_progress("Generating chart from analyzed data...")
-                criar_grafico_a_partir_do_excel(
-                    excel_path,
-                    sim_outdir,
-                    sim_index=1,
-                    salvar_png=True,
-                    mostrar=show_plots,
-                )
+                if not only_comparative:
+                    report_progress("Generating chart from analyzed data...")
+                    graph_name = f"grafico_{lis_target.stem}.png"
+                    self._criar_grafico_customizado(
+                        excel_path,
+                        sim_outdir,
+                        graph_name,
+                        plot_options,
+                        mostrar=show_plots,
+                    )
+                else:
+                    report_progress("Skipping individual chart (only comparative option enabled).")
 
                 report_progress("Processing time series...")
                 try:

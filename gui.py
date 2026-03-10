@@ -634,7 +634,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         outdir = Path(self.outdir_var.get())
         
         if not outdir.exists():
-            messagebox.showinfo("Informação", f"A pasta de saída não existe:\n{outdir}")
+            self._show_info("Informação", "A pasta de saída não existe.", details=[("Pasta", outdir)])
             return
         
         # Contar arquivos
@@ -643,7 +643,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         dirs_count = sum(1 for f in all_files if f.is_dir())
         
         if files_count == 0 and dirs_count == 0:
-            messagebox.showinfo("Informação", "A pasta de saída já está vazia.")
+            self._show_info("Informação", "A pasta de saída já está vazia.")
             return
         
         # Confirmação
@@ -674,11 +674,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.log(f"Erro ao excluir {item.name}: {e}")
             
             self.log(f"Pasta de saída limpa: {deleted_files} arquivo(s), {deleted_dirs} pasta(s) excluída(s)")
-            messagebox.showinfo("Sucesso", f"Pasta limpa com sucesso!\n\n{deleted_files} arquivo(s)\n{deleted_dirs} pasta(s)")
+            self._show_success(
+                "Sucesso",
+                "Pasta limpa com sucesso.",
+                details=[("Resumo", f"{deleted_files} arquivo(s)\n{deleted_dirs} pasta(s)")],
+            )
             
         except Exception as e:
             self.log(f"Erro ao limpar pasta: {e}")
-            messagebox.showerror("Erro", f"Erro ao limpar pasta:\n{str(e)}")
+            self._show_error("Erro", "Erro ao limpar pasta.", details=[("Detalhes", str(e))])
 
     def _cancel_processing(self):
         """Cancelar processamento em andamento"""
@@ -703,9 +707,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             try:
                 content = self.log_textbox.get("1.0", "end")
                 Path(file).write_text(content, encoding='utf-8')
-                messagebox.showinfo("Sucesso", f"Logs salvos em:\n{file}")
+                self._show_success("Sucesso", "Logs salvos com sucesso.", details=[("Arquivo", file)])
             except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao salvar logs:\n{e}")
+                self._show_error("Erro", "Falha ao salvar logs.", details=[("Detalhes", str(e))])
     
     def log(self, message: str):
         """Adiciona mensagem ao log"""
@@ -716,20 +720,135 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.see("end")
         self.log_textbox.configure(state="disabled")
 
+    def _show_styled_dialog(self, title: str, message: str, level: str = "info", details: list | None = None):
+        """Exibe dialogo modal customizado com layout mais organizado que messagebox."""
+        palette = {
+            "info": {"accent": "#2563eb", "badge": "INFO"},
+            "success": {"accent": "#15803d", "badge": "OK"},
+            "warning": {"accent": "#b45309", "badge": "AVISO"},
+            "error": {"accent": "#b91c1c", "badge": "ERRO"},
+        }
+        cfg = palette.get(level, palette["info"])
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        container = ctk.CTkFrame(dialog, corner_radius=12)
+        container.pack(fill="both", expand=True, padx=14, pady=14)
+
+        header = ctk.CTkFrame(container, corner_radius=10, fg_color=cfg["accent"])
+        header.pack(fill="x", padx=12, pady=(12, 8))
+
+        ctk.CTkLabel(
+            header,
+            text=cfg["badge"],
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="white",
+        ).pack(side="left", padx=10, pady=8)
+
+        ctk.CTkLabel(
+            header,
+            text=title,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white",
+        ).pack(side="left", padx=(0, 10), pady=8)
+
+        body = ctk.CTkFrame(container, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=14, pady=(4, 8))
+
+        ctk.CTkLabel(
+            body,
+            text=message,
+            justify="left",
+            anchor="w",
+            wraplength=620,
+            font=ctk.CTkFont(size=13),
+        ).pack(fill="x", pady=(0, 8))
+
+        if details:
+            for label, value in details:
+                section = ctk.CTkFrame(body, corner_radius=8)
+                section.pack(fill="x", pady=5)
+
+                ctk.CTkLabel(
+                    section,
+                    text=label,
+                    anchor="w",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                ).pack(fill="x", padx=10, pady=(8, 2))
+
+                text_box = ctk.CTkTextbox(section, height=48, wrap="word")
+                text_box.pack(fill="x", padx=10, pady=(0, 8))
+                text_box.insert("1.0", str(value))
+                text_box.configure(state="disabled")
+
+        buttons = ctk.CTkFrame(container, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _close_dialog(_event=None):
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+            self.focus_force()
+
+        ctk.CTkButton(
+            buttons,
+            text="OK",
+            width=120,
+            fg_color=cfg["accent"],
+            hover_color=cfg["accent"],
+            command=_close_dialog,
+        ).pack(side="right")
+
+        dialog.bind("<Return>", _close_dialog)
+        dialog.bind("<Escape>", _close_dialog)
+
+        dialog.update_idletasks()
+        width = max(520, min(dialog.winfo_reqwidth(), 860))
+        height = max(260, min(dialog.winfo_reqheight(), 640))
+
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        pos_x = parent_x + (parent_w - width) // 2
+        pos_y = parent_y + (parent_h - height) // 2
+        dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        dialog.lift()
+        dialog.focus_force()
+        self.wait_window(dialog)
+
+    def _show_info(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="info", details=details)
+
+    def _show_success(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="success", details=details)
+
+    def _show_warning(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="warning", details=details)
+
+    def _show_error(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="error", details=details)
+
     def _run_atp_simulation(self):
         """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
         if self._atp_running:
-            messagebox.showinfo("Simulacao ATP", "Ja existe uma simulacao ATP em andamento.")
+            self._show_info("Simulacao ATP", "Ja existe uma simulacao ATP em andamento.")
             return
 
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
-            messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
+            self._show_error("Erro", "Arquivo .atp nao encontrado.")
             return
 
         outdir_str = self.outdir_var.get().strip()
         if not outdir_str:
-            messagebox.showerror("Erro", "Pasta de saida nao informada")
+            self._show_error("Erro", "Pasta de saida nao informada.")
             return
 
         show_plots = self.show_plots_var.get()
@@ -873,9 +992,13 @@ class ModernLisAnalysisApp(ctk.CTk):
             if self.open_output_var.get() and outdir:
                 _open_in_file_manager(Path(outdir))
 
-            messagebox.showinfo(
-                "Sucesso",
-                f"Simulacao concluida em {elapsed:.1f}s.\n\nLIS file:\n{lis_path}\n\nResultados:\n{outdir if outdir else '(nao informado)'}"
+            self._show_success(
+                "Simulacao concluida",
+                f"Simulacao finalizada em {elapsed:.1f}s.",
+                details=[
+                    ("LIS file", lis_path),
+                    ("Resultados", outdir if outdir else "(nao informado)"),
+                ],
             )
         else:
             self.status_var.set("Pronto")
@@ -884,7 +1007,11 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._update_simulation_results(
                 f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
             )
-            messagebox.showerror("Erro", f"Falha na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}")
+            self._show_error(
+                "Erro na simulacao ATP",
+                f"Falha apos {elapsed:.1f}s.",
+                details=[("Detalhes", error_msg)],
+            )
 
     def _set_atp_feedback_running(self):
         """Ativa indicadores visuais de simulacao ATP em andamento."""
@@ -1064,9 +1191,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             elif os.name == 'nt':
                 os.startfile(str(file_path))
             else:
-                messagebox.showinfo('Abrir arquivo', f'Abra manualmente: {file_path}')
+                self._show_info("Abrir arquivo", "Abra manualmente.", details=[("Arquivo", file_path)])
         except Exception as e:
-            messagebox.showerror('Erro ao abrir', str(e))
+            self._show_error("Erro ao abrir", "Falha ao abrir arquivo.", details=[("Detalhes", str(e))])
     
     def _process_selected(self):
         """Processar arquivos .lis selecionados"""
@@ -1077,7 +1204,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 selected_files.append(Path(file_str))
         
         if not selected_files:
-            messagebox.showwarning("Aviso", "Nenhum arquivo selecionado.\n\nMarque os arquivos que deseja processar.")
+            self._show_warning("Aviso", "Nenhum arquivo selecionado.", details=[("Ação", "Marque os arquivos que deseja processar.")])
             return
         
         self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
@@ -1147,7 +1274,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                         error_msg = f"Erro ao calcular estatísticas: {e}"
                         if not self.hide_errors_var.get():
                             self.log(error_msg)
-                            messagebox.showwarning("Aviso", error_msg)
+                            self.after(
+                                0,
+                                lambda msg=error_msg: self._show_warning(
+                                    "Aviso",
+                                    "Falha ao calcular estatisticas.",
+                                    details=[("Detalhes", msg)],
+                                ),
+                            )
                     
                     # Gráfico individual (se não for modo "só comparativo")
                     if not self.only_comparative_var.get():
@@ -1191,11 +1325,25 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if self.open_output_var.get():
                     _open_in_file_manager(outdir)
                 
-                messagebox.showinfo("Sucesso", f"Processamento concluído!\n\n{len(selected_files)} arquivo(s) processado(s)\nResultados em:\n{outdir}")
+                self.after(
+                    0,
+                    lambda total=len(selected_files), result_outdir=str(outdir): self._show_success(
+                        "Processamento concluido",
+                        f"{total} arquivo(s) processado(s) com sucesso.",
+                        details=[("Resultados", result_outdir)],
+                    ),
+                )
                 
             except Exception as e:
                 self.log(f"Erro durante processamento: {e}")
-                messagebox.showerror("Erro", f"Erro durante processamento:\n{str(e)}")
+                self.after(
+                    0,
+                    lambda msg=str(e): self._show_error(
+                        "Erro",
+                        "Erro durante processamento.",
+                        details=[("Detalhes", msg)],
+                    ),
+                )
             finally:
                 self.cancel_btn.pack_forget()
                 self.cancel_event.clear()

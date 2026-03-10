@@ -31,8 +31,8 @@ def run_atp_solver(
 
     Detecção de término:
     - inicia o solver em processo separado
-    - aguarda o término real do processo via process.wait()
-    - valida existência de .lis/.LIS
+    - detecta conclusão pelo processo ou por marcador no output
+    - valida existência/estabilização de .lis/.LIS
     """
 
     atp_path = Path(atp_file_path)
@@ -79,6 +79,8 @@ def run_atp_solver(
     auto_enter_thread = threading.Thread(target=_auto_press_enter, args=(process, status_callback), daemon=True)
     auto_enter_thread.start()
 
+    completion_event = threading.Event()
+
     def _drain_output() -> None:
         if process.stdout is None:
             return
@@ -87,19 +89,98 @@ def run_atp_solver(
                 clean = line.strip()
                 if clean:
                     _notify(f"[runATP] {clean}")
+                    lower = clean.lower()
+                    if "total execution time was" in lower or "atp finished at" in lower:
+                        if not completion_event.is_set():
+                            _notify("Completion marker detected in runATP output.")
+                        completion_event.set()
         except Exception:
             pass
 
     output_thread = threading.Thread(target=_drain_output, daemon=True)
     output_thread.start()
 
+    return_code = None
+    lis_path = None
+    last_size = None
+    last_change_time = None
+    stable_window_sec = 3.0
+    process_done = False
+    process_done_at = None
+
+    def _update_lis_state() -> bool:
+        nonlocal lis_path, last_size, last_change_time
+
+        candidate = None
+        try:
+            if lis_lower.exists() and lis_lower.stat().st_size > 0:
+                candidate = lis_lower
+            elif lis_upper.exists() and lis_upper.stat().st_size > 0:
+                candidate = lis_upper
+        except Exception:
+            candidate = None
+
+        if candidate is None:
+            return False
+
+        lis_path = candidate
+        try:
+            current_size = candidate.stat().st_size
+        except Exception:
+            return False
+
+        if last_size != current_size:
+            last_size = current_size
+            last_change_time = time.time()
+            return False
+
+        return last_change_time is not None and (time.time() - last_change_time) >= stable_window_sec
+
     try:
-        return_code = process.wait(timeout=timeout)
-        _notify(f"Process finished with return code {return_code}")
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        process.wait()
-        raise TimeoutError(f"Timeout aguardando termino do processo ATP ({timeout}s)") from exc
+        while True:
+            now = time.time()
+            elapsed_total = now - start_time
+            lis_stable = _update_lis_state()
+
+            if not process_done:
+                polled = process.poll()
+                if polled is not None:
+                    return_code = polled
+                    process_done = True
+                    process_done_at = now
+                    _notify(f"Process finished with return code {return_code}")
+                    _notify("Waiting for LIS generation/stabilization...")
+
+            # Se o wrapper travar no "Hit any key", finaliza automaticamente
+            # quando houver marcador de conclusao e LIS estavel.
+            if not process_done and completion_event.is_set() and lis_stable:
+                _notify("Stable LIS + completion marker detected. Closing interactive runATP wrapper...")
+                try:
+                    process.terminate()
+                    return_code = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return_code = process.wait()
+
+                process_done = True
+                process_done_at = now
+                _notify(f"Process finished with return code {return_code}")
+                _notify("Waiting for LIS generation/stabilization...")
+
+            if process_done and lis_stable:
+                break
+
+            # Timeout global de execucao ATP.
+            if elapsed_total > timeout:
+                process.kill()
+                process.wait()
+                raise TimeoutError(f"Timeout aguardando termino do processo ATP ({timeout}s)")
+
+            # Tolerancia curta para flush apos processo terminar.
+            if process_done and process_done_at is not None and (now - process_done_at) > 30.0:
+                break
+
+            time.sleep(0.2)
     finally:
         try:
             if process.stdin is not None:
@@ -109,33 +190,6 @@ def run_atp_solver(
 
         auto_enter_thread.join(timeout=1.0)
         output_thread.join(timeout=1.0)
-
-    # Janela de tolerancia para flush final + estabilizacao do arquivo .lis.
-    _notify("Waiting for LIS generation/stabilization...")
-    grace_deadline = time.time() + 30.0
-    stable_window_sec = 3.0
-    lis_path = None
-    last_size = None
-    last_change_time = None
-
-    while time.time() < grace_deadline:
-        candidate = None
-        if lis_lower.exists() and lis_lower.stat().st_size > 0:
-            candidate = lis_lower
-        elif lis_upper.exists() and lis_upper.stat().st_size > 0:
-            candidate = lis_upper
-
-        if candidate is not None:
-            current_size = candidate.stat().st_size
-            lis_path = candidate
-
-            if last_size != current_size:
-                last_size = current_size
-                last_change_time = time.time()
-            elif last_change_time is not None and (time.time() - last_change_time) >= stable_window_sec:
-                break
-
-        time.sleep(0.2)
 
     elapsed = time.time() - start_time
 

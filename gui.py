@@ -122,6 +122,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         # Estado da execucao ATP
         self._atp_running = False
         self._atp_started_at = None
+        self._atp_timeout_sec = 600
+        self._atp_progress_value = 0.0
         self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
 
         # Simulacao ATP (.atp)
@@ -517,9 +519,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         self.atp_run_button.pack(side="left", padx=5)
 
-        self.atp_progress = ctk.CTkProgressBar(action_card, mode="indeterminate")
+        self.atp_progress = ctk.CTkProgressBar(action_card)
         self.atp_progress.pack(fill="x", padx=15, pady=(0, 8))
-        self.atp_progress.stop()
+        self.atp_progress.set(0)
 
         ctk.CTkLabel(
             action_card,
@@ -731,13 +733,31 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._update_simulation_results("Executando simulacao ATP... aguarde a conclusao do solver.\n")
 
         def worker():
+            def report_progress(message: str):
+                self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
+
             try:
-                lis_path = run_atp_solver(atp_file)
+                lis_path = run_atp_solver(atp_file, status_callback=report_progress)
                 self.after(0, lambda: self._on_atp_simulation_finished(True, lis_path))
             except Exception as e:
-                self.after(0, lambda: self._on_atp_simulation_finished(False, str(e)))
+                error_msg = str(e)
+                self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_atp_progress_message(self, message: str):
+        """Recebe mensagens de progresso do runner ATP no thread principal."""
+        self.log(f"[ATP] {message}")
+
+        text = message.lower()
+        if "process started" in text:
+            self._set_atp_progress(0.10)
+        elif "process finished" in text:
+            self._set_atp_progress(0.88)
+        elif "waiting for lis generation/stabilization" in text:
+            self._set_atp_progress(0.92)
+        elif "lis ready" in text:
+            self._set_atp_progress(0.98)
 
     def _on_atp_simulation_finished(self, success: bool, payload: str):
         """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
@@ -764,8 +784,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         """Ativa indicadores visuais de simulacao ATP em andamento."""
         self._atp_running = True
         self._atp_started_at = time.time()
+        self._set_atp_progress(0.02)
         self.atp_run_button.configure(state="disabled", text="Executando...")
-        self.atp_progress.start()
         self.atp_run_status_var.set("Status: executando (0s)")
         self._tick_atp_running_status()
 
@@ -777,8 +797,10 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._atp_running = False
         self._atp_started_at = None
-        self.atp_progress.stop()
-        self.atp_progress.set(0)
+        if success:
+            self._set_atp_progress(1.0)
+        else:
+            self._set_atp_progress(0.0)
         self.atp_run_button.configure(state="normal", text="Run Simulation")
 
         if success:
@@ -794,8 +816,20 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         elapsed = int(time.time() - self._atp_started_at)
+        # Avanco temporal suave ate ~85% enquanto o processo roda.
+        timed_progress = min(0.85, 0.05 + (elapsed / float(self._atp_timeout_sec)) * 0.80)
+        self._set_atp_progress(timed_progress)
         self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")
         self.after(1000, self._tick_atp_running_status)
+
+    def _set_atp_progress(self, value: float):
+        """Define progresso ATP entre 0 e 1, sem retroceder durante execucao."""
+        clamped = max(0.0, min(1.0, float(value)))
+        if self._atp_running:
+            self._atp_progress_value = max(self._atp_progress_value, clamped)
+        else:
+            self._atp_progress_value = clamped
+        self.atp_progress.set(self._atp_progress_value)
 
     def _update_simulation_results(self, text: str):
         """Atualiza area de resultados da simulacao"""

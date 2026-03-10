@@ -3,18 +3,23 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable, Optional
 
 ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
 
 
-def run_atp_solver(atp_file_path: str, timeout: int = 600) -> str:
+def run_atp_solver(
+    atp_file_path: str,
+    timeout: int = 600,
+    status_callback: Optional[Callable[[str], None]] = None,
+) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
 
     Detecção de término:
-    - espera o .lis aparecer
-    - monitora o final do .lis
-    - detecta 'TOTAL ELAPSED TIME' ou 'JOB COMPLETED'
+    - inicia o solver em processo separado
+    - aguarda o término real do processo via process.wait()
+    - valida existência de .lis/.LIS
     """
 
     atp_path = Path(atp_file_path)
@@ -29,71 +34,77 @@ def run_atp_solver(atp_file_path: str, timeout: int = 600) -> str:
     lis_lower = working_directory / f"{base_name}.lis"
     lis_upper = working_directory / f"{base_name}.LIS"
 
-    print("\n===== ATP SIMULATION START =====")
-    print("ATP executable:", ATP_EXECUTABLE)
-    print("ATP input:", atp_path)
-    print("Working directory:", working_directory)
+    def _notify(message: str) -> None:
+        print(message)
+        if status_callback is not None:
+            try:
+                status_callback(message)
+            except Exception:
+                pass
+
+    _notify("===== ATP SIMULATION START =====")
+    _notify(f"ATP executable: {ATP_EXECUTABLE}")
+    _notify(f"ATP input: {atp_path}")
+    _notify(f"Working directory: {working_directory}")
 
     start_time = time.time()
 
-    # executa runATP
-    subprocess.Popen(
+    # Executa runATP e aguarda o término real do processo.
+    process = subprocess.Popen(
         [ATP_EXECUTABLE, atp_name],
         cwd=working_directory,
     )
+    _notify(f"Process started (pid={process.pid}). Waiting for completion...")
 
-    print("Solver iniciado, aguardando .lis...")
+    try:
+        return_code = process.wait(timeout=timeout)
+        _notify(f"Process finished with return code {return_code}")
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait()
+        raise TimeoutError(f"Timeout aguardando termino do processo ATP ({timeout}s)") from exc
 
-    # esperar .lis aparecer
+    # Janela de tolerancia para flush final + estabilizacao do arquivo .lis.
+    _notify("Waiting for LIS generation/stabilization...")
+    grace_deadline = time.time() + 30.0
+    stable_window_sec = 3.0
     lis_path = None
-    while True:
+    last_size = None
+    last_change_time = None
 
-        if lis_lower.exists():
-            lis_path = lis_lower
-            break
+    while time.time() < grace_deadline:
+        candidate = None
+        if lis_lower.exists() and lis_lower.stat().st_size > 0:
+            candidate = lis_lower
+        elif lis_upper.exists() and lis_upper.stat().st_size > 0:
+            candidate = lis_upper
 
-        if lis_upper.exists():
-            lis_path = lis_upper
-            break
+        if candidate is not None:
+            current_size = candidate.stat().st_size
+            lis_path = candidate
 
-        if time.time() - start_time > timeout:
-            raise TimeoutError("Timeout aguardando geracao do .lis")
-
-        time.sleep(0.5)
-
-    print("LIS detectado:", lis_path)
-
-    # monitorar final da simulação
-    print("Monitorando final da simulacao...")
-
-    while True:
-
-        if time.time() - start_time > timeout:
-            raise TimeoutError("Timeout aguardando final da simulacao")
-
-        try:
-            with lis_path.open("rb") as f:
-
-                f.seek(0, 2)
-                size = f.tell()
-
-                read_size = min(2000, size)
-
-                f.seek(-read_size, 2)
-                tail = f.read().decode(errors="ignore")
-
-            if "TOTAL ELAPSED TIME" in tail or "JOB COMPLETED" in tail:
+            if last_size != current_size:
+                last_size = current_size
+                last_change_time = time.time()
+            elif last_change_time is not None and (time.time() - last_change_time) >= stable_window_sec:
                 break
 
-        except Exception:
-            pass
-
-        time.sleep(1)
+        time.sleep(0.2)
 
     elapsed = time.time() - start_time
 
-    print("Simulacao concluida")
-    print(f"Tempo total: {elapsed:.2f} s")
-    print("===== ATP SIMULATION END =====\n")
+    _notify("Simulacao concluida")
+    _notify(f"Tempo total: {elapsed:.2f} s")
+    _notify("===== ATP SIMULATION END =====")
+
+    if lis_path is None:
+        raise RuntimeError(
+            f"ATP process finished with code {return_code}, but .lis/.LIS was not generated"
+        )
+
+    if return_code != 0:
+        _notify(f"Aviso: ATP finalizou com codigo {return_code}, mas gerou LIS valido.")
+
+    _notify(f"LIS ready: {lis_path}")
 
     return str(lis_path)

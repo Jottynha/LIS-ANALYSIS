@@ -723,10 +723,10 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _show_styled_dialog(self, title: str, message: str, level: str = "info", details: list | None = None):
         """Exibe dialogo modal customizado com layout mais organizado que messagebox."""
         palette = {
-            "info": {"accent": "#2563eb", "badge": "INFO"},
-            "success": {"accent": "#15803d", "badge": "OK"},
-            "warning": {"accent": "#b45309", "badge": "AVISO"},
-            "error": {"accent": "#b91c1c", "badge": "ERRO"},
+            "info": {"accent": "#2563eb"},
+            "success": {"accent": "#15803d"},
+            "warning": {"accent": "#b45309"},
+            "error": {"accent": "#b91c1c"},
         }
         cfg = palette.get(level, palette["info"])
 
@@ -744,17 +744,12 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             header,
-            text=cfg["badge"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="white",
-        ).pack(side="left", padx=10, pady=8)
-
-        ctk.CTkLabel(
-            header,
             text=title,
             font=ctk.CTkFont(size=16, weight="bold"),
             text_color="white",
-        ).pack(side="left", padx=(0, 10), pady=8)
+            anchor="center",
+            justify="center",
+        ).pack(fill="x", padx=12, pady=10)
 
         body = ctk.CTkFrame(container, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=14, pady=(4, 8))
@@ -768,19 +763,78 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
         ).pack(fill="x", pady=(0, 8))
 
+        copy_idle_text = "⧉"
+        copy_done_text = "✓"
+        copy_idle_fg = ("#E6E8EB", "#2B3036")
+        copy_idle_hover = ("#D9DDE2", "#353B43")
+        copy_idle_text_color = ("#2D3748", "#DCE3EA")
+        copy_idle_border = ("#C9D1D9", "#4A5568")
+        copy_done_fg = ("#2F6F44", "#2F6F44")
+
+        def _copy_detail(content: str, button=None):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(content)
+                self.update_idletasks()
+            except Exception:
+                return
+
+            if button is not None:
+                try:
+                    button.configure(
+                        text=copy_done_text,
+                        fg_color=copy_done_fg,
+                        hover_color=copy_done_fg,
+                        text_color="#FFFFFF",
+                        border_width=0,
+                        border_color=copy_done_fg,
+                    )
+                    dialog.after(
+                        1200,
+                        lambda btn=button: btn.winfo_exists()
+                        and btn.configure(
+                            text=copy_idle_text,
+                            fg_color=copy_idle_fg,
+                            hover_color=copy_idle_hover,
+                            text_color=copy_idle_text_color,
+                            border_width=1,
+                            border_color=copy_idle_border,
+                        ),
+                    )
+                except Exception:
+                    pass
+
         if details:
             for label, value in details:
                 section = ctk.CTkFrame(body, corner_radius=8)
-                section.pack(fill="x", pady=5)
+                section.pack(fill="x", pady=(6, 6))
+
+                section_header = ctk.CTkFrame(section, fg_color="transparent")
+                section_header.pack(fill="x", padx=10, pady=(8, 2))
 
                 ctk.CTkLabel(
-                    section,
+                    section_header,
                     text=label,
                     anchor="w",
                     font=ctk.CTkFont(size=12, weight="bold"),
-                ).pack(fill="x", padx=10, pady=(8, 2))
+                ).pack(side="left", fill="x", expand=True)
 
-                text_box = ctk.CTkTextbox(section, height=48, wrap="word")
+                copy_btn = ctk.CTkButton(
+                    section_header,
+                    text=copy_idle_text,
+                    width=34,
+                    height=24,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    fg_color=copy_idle_fg,
+                    hover_color=copy_idle_hover,
+                    text_color=copy_idle_text_color,
+                    border_width=1,
+                    border_color=copy_idle_border,
+                )
+                copy_btn.pack(side="right")
+                copy_btn.configure(command=lambda v=str(value), btn=copy_btn: _copy_detail(v, btn))
+
+                text_box = ctk.CTkTextbox(section, height=62, wrap="char")
                 text_box.pack(fill="x", padx=10, pady=(0, 8))
                 text_box.insert("1.0", str(value))
                 text_box.configure(state="disabled")
@@ -803,14 +857,14 @@ class ModernLisAnalysisApp(ctk.CTk):
             fg_color=cfg["accent"],
             hover_color=cfg["accent"],
             command=_close_dialog,
-        ).pack(side="right")
+        ).pack(pady=2)
 
         dialog.bind("<Return>", _close_dialog)
         dialog.bind("<Escape>", _close_dialog)
 
         dialog.update_idletasks()
-        width = max(520, min(dialog.winfo_reqwidth(), 860))
-        height = max(260, min(dialog.winfo_reqheight(), 640))
+        width = max(560, min(dialog.winfo_reqwidth(), 860))
+        height = max(220, min(dialog.winfo_reqheight(), 620))
 
         parent_x = self.winfo_rootx()
         parent_y = self.winfo_rooty()
@@ -996,7 +1050,6 @@ class ModernLisAnalysisApp(ctk.CTk):
                 "Simulacao concluida",
                 f"Simulacao finalizada em {elapsed:.1f}s.",
                 details=[
-                    ("LIS file", lis_path),
                     ("Resultados", outdir if outdir else "(nao informado)"),
                 ],
             )

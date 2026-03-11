@@ -32,6 +32,8 @@ try:
         criar_grafico_series_temporais,
     )
     from solver.atp_runner import run_atp_solver
+    from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
+    from atp_writer import write_atp_file
     from control_detector import (
         ControlDetector,
         FileControlInfo,
@@ -128,6 +130,11 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
+        self.atp_param_status_var = tk.StringVar(value="Nenhum parametro carregado")
+        self._atp_elements_cache = []
+        self._atp_original_lines_cache = []
+        self._atp_param_rows = []
+        self.atp_params_scroll_frame = None
         
         
         # Opções de visualização de gráficos
@@ -480,6 +487,40 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=120
         ).pack(side="left")
 
+        params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        params_card.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            params_card,
+            text="Parametros editaveis do .atp",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 8))
+
+        ctk.CTkLabel(
+            params_card,
+            text="Detecta automaticamente R/L/C/V/I e permite editar valores antes da simulacao.",
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        params_actions = ctk.CTkFrame(params_card, fg_color="transparent")
+        params_actions.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkButton(
+            params_actions,
+            text="Detectar parametros",
+            command=self._load_atp_parameters,
+            width=180
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            params_actions,
+            textvariable=self.atp_param_status_var,
+            font=ctk.CTkFont(size=12)
+        ).pack(side="left", padx=10)
+
+        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=180)
+        self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
+
         info_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         info_card.pack(fill="x", pady=(0, 15))
 
@@ -621,7 +662,139 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         if file:
             self.atp_file_var.set(file)
+            self._clear_atp_parameter_editor()
+            self._load_atp_parameters(show_dialog_errors=False)
             self._save_prefs()
+
+    def _clear_atp_parameter_editor(self):
+        """Limpa a lista visual e caches de parametros ATP detectados."""
+        self._atp_elements_cache = []
+        self._atp_original_lines_cache = []
+        self._atp_param_rows = []
+        self.atp_param_status_var.set("Nenhum parametro carregado")
+
+        if self.atp_params_scroll_frame is None:
+            return
+
+        for widget in self.atp_params_scroll_frame.winfo_children():
+            widget.destroy()
+
+    def _load_atp_parameters(self, show_dialog_errors: bool = True):
+        """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._clear_atp_parameter_editor()
+            if show_dialog_errors:
+                self._show_error("Erro", "Arquivo .atp nao encontrado para detectar parametros.")
+            return
+
+        try:
+            elements, original_lines = parse_atp_file(atp_file)
+            editable = get_editable_parameters(elements)
+        except Exception as e:
+            self._clear_atp_parameter_editor()
+            if show_dialog_errors:
+                self._show_error("Erro", "Falha ao analisar arquivo .atp.", details=[("Detalhes", str(e))])
+            return
+
+        self._clear_atp_parameter_editor()
+        self._atp_elements_cache = elements
+        self._atp_original_lines_cache = original_lines
+
+        if not editable:
+            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            if self.atp_params_scroll_frame is not None:
+                ctk.CTkLabel(
+                    self.atp_params_scroll_frame,
+                    text="Nao foram encontrados componentes R/L/C/V/I editaveis neste arquivo.",
+                    justify="left"
+                ).pack(anchor="w", padx=6, pady=6)
+            self.log("[ATP] Nenhum parametro editavel detectado no .atp selecionado")
+            return
+
+        parameter_titles = {
+            "resistance": "Resistencia",
+            "inductance": "Indutancia",
+            "capacitance": "Capacitancia",
+            "voltage": "Tensao",
+            "current": "Corrente",
+            "value": "Valor",
+        }
+
+        for row in editable:
+            param_name = str(row.get("parameter", "value"))
+            param_label = parameter_titles.get(param_name, param_name)
+            component = f"{row.get('name', '?')} ({row.get('type', 'ATPElement')})"
+            current_value = row.get("value", "")
+            value_str = "" if current_value is None else str(current_value)
+
+            item = ctk.CTkFrame(self.atp_params_scroll_frame, corner_radius=8)
+            item.pack(fill="x", padx=4, pady=4)
+
+            ctk.CTkLabel(
+                item,
+                text=f"{component}  |  {param_label}",
+                font=ctk.CTkFont(size=12, weight="bold")
+            ).pack(side="left", padx=(8, 8), pady=8)
+
+            entry = ctk.CTkEntry(item, width=220)
+            entry.pack(side="right", padx=8, pady=8)
+            entry.insert(0, value_str)
+
+            self._atp_param_rows.append(
+                {
+                    "line_index": int(row.get("line_index", -1)),
+                    "name": str(row.get("name", "")),
+                    "parameter": param_name,
+                    "original_value": float(current_value),
+                    "entry": entry,
+                }
+            )
+
+        self.atp_param_status_var.set(f"{len(self._atp_param_rows)} parametro(s) detectado(s)")
+        self.log(f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)}")
+
+    def _collect_atp_parameter_overrides(self) -> list[dict]:
+        """Coleta alterações de parametros ATP digitadas na GUI."""
+        overrides = []
+        invalid_items = []
+
+        for row in self._atp_param_rows:
+            raw = row["entry"].get().strip()
+            name = row["name"]
+            parameter = row["parameter"]
+            line_index = row["line_index"]
+            original_value = row["original_value"]
+
+            if raw == "":
+                invalid_items.append(f"{name} ({parameter}): valor vazio")
+                continue
+
+            normalized = raw.replace("D", "E").replace("d", "e")
+            try:
+                new_value = float(normalized)
+            except ValueError:
+                invalid_items.append(f"{name} ({parameter}): '{raw}'")
+                continue
+
+            if abs(new_value - original_value) <= 1e-15:
+                continue
+
+            overrides.append(
+                {
+                    "line_index": line_index,
+                    "name": name,
+                    "parameter": parameter,
+                    "new_value": new_value,
+                    "old_value": original_value,
+                }
+            )
+
+        if invalid_items:
+            details = "\n".join(invalid_items[:15])
+            raise ValueError(f"Valores invalidos no editor de parametros ATP:\n{details}")
+
+        return overrides
     
     
     def _clear_filter(self):
@@ -916,6 +1089,12 @@ class ModernLisAnalysisApp(ctk.CTk):
             'show_stats_box': self.plot_stats_box_var.get(),
         }
 
+        try:
+            atp_overrides = self._collect_atp_parameter_overrides()
+        except Exception as e:
+            self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(e))])
+            return
+
         self._set_atp_feedback_running()
         self.status_var.set("Executando simulacao ATP...")
         self.log(f"Iniciando simulacao ATP para: {atp_file}")
@@ -925,11 +1104,34 @@ class ModernLisAnalysisApp(ctk.CTk):
             def report_progress(message: str):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
+            parametrized_exec_atp = None
             try:
                 import shutil
 
+                execution_atp_path = Path(atp_file)
+                if atp_overrides:
+                    report_progress("Applying ATP parameter overrides...")
+                    elements, original_lines = parse_atp_file(execution_atp_path)
+                    for override in atp_overrides:
+                        update_parameter(
+                            elements,
+                            element_name=override["name"],
+                            new_value=override["new_value"],
+                            line_index=override["line_index"],
+                            parameter_name=override["parameter"],
+                        )
+
+                    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    parametrized_exec_atp = (
+                        execution_atp_path.parent
+                        / f"{execution_atp_path.stem}__param_{run_tag}{execution_atp_path.suffix}"
+                    )
+                    write_atp_file(elements, original_lines, parametrized_exec_atp)
+                    execution_atp_path = parametrized_exec_atp
+                    report_progress(f"Parameterized ATP ready: {execution_atp_path.name}")
+
                 report_progress("Running ATP solver...")
-                generated_lis_path = Path(run_atp_solver(atp_file, status_callback=report_progress))
+                generated_lis_path = Path(run_atp_solver(str(execution_atp_path), status_callback=report_progress))
 
                 report_progress("Preparing output folder...")
                 base_outdir = Path(outdir_str)
@@ -948,6 +1150,29 @@ class ModernLisAnalysisApp(ctk.CTk):
                 except Exception:
                     # Se mover falhar, segue com o .lis no caminho original.
                     lis_target = generated_lis_path
+
+                generated_atp_snapshot = None
+                if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
+                    generated_atp_snapshot = sim_outdir / parametrized_exec_atp.name
+                    try:
+                        generated_atp_snapshot = Path(
+                            shutil.move(str(parametrized_exec_atp), str(generated_atp_snapshot))
+                        )
+                    except Exception:
+                        try:
+                            shutil.copy2(str(parametrized_exec_atp), str(generated_atp_snapshot))
+                        except Exception:
+                            generated_atp_snapshot = None
+
+                if atp_overrides:
+                    metadata = {
+                        "source_atp": atp_file,
+                        "executed_atp": str(execution_atp_path),
+                        "applied_overrides": atp_overrides,
+                        "generated_atp_in_output": str(generated_atp_snapshot) if generated_atp_snapshot else None,
+                    }
+                    metadata_path = sim_outdir / "parametros_aplicados.json"
+                    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
                 report_progress("Parsing LIS and generating tables...")
                 df, stats_lines, summary = parse_lis_table(lis_target)
@@ -996,11 +1221,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                     "lis_path": str(lis_target),
                     "outdir": str(sim_outdir),
                     "excel_path": str(excel_path),
+                    "applied_overrides": len(atp_overrides),
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
+            finally:
+                if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
+                    try:
+                        parametrized_exec_atp.unlink()
+                    except Exception:
+                        pass
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1025,13 +1257,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         if success:
             lis_path = payload["lis_path"] if isinstance(payload, dict) else str(payload)
             outdir = payload.get("outdir") if isinstance(payload, dict) else None
+            overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
             self.status_var.set("Simulation completed")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
             if outdir:
                 self.log(f"Resultados da analise salvos em: {outdir}")
+            if overrides_count:
+                self.log(f"Parametros ATP aplicados nesta execucao: {overrides_count}")
 
             self._update_simulation_results(
-                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}"
+                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}\nParameter overrides: {overrides_count}"
             )
 
             if self.save_logs_var.get() and outdir:

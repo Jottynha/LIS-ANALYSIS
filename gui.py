@@ -1010,7 +1010,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         text = message.lower()
         if "process started" in text:
-            self._set_atp_progress(0.10)
+            self._set_atp_progress(0.03)
         elif "process finished" in text:
             self._set_atp_progress(0.88)
         elif "waiting for lis generation/stabilization" in text:
@@ -1074,10 +1074,10 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._atp_running = True
         self._atp_started_at = time.time()
-        self._set_atp_progress(0.02)
+        self._set_atp_progress(0.0)
         self.atp_run_button.configure(state="disabled", text="Executando...")
         self.atp_run_status_var.set("Status: executando (0s)")
-        self._tick_atp_running_status()
+        self.after(1000, self._tick_atp_running_status)
 
     def _set_atp_feedback_finished(self, success: bool) -> float:
         """Desativa indicadores visuais e retorna tempo decorrido."""
@@ -1107,9 +1107,9 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         elapsed_float = time.time() - self._atp_started_at
         elapsed = int(elapsed_float)
-        # Avanco mais responsivo: cresce rapido no inicio e desacelera ate ~85%.
-        # Isso acompanha melhor o tempo real perceptivel sem depender de duracao total exata.
-        timed_progress = 0.05 + 0.80 * (1.0 - math.exp(-elapsed_float / 45.0))
+        # Inicia do zero e acelera de forma suave apos o primeiro segundo.
+        base_elapsed = max(0.0, elapsed_float - 1.0)
+        timed_progress = 0.80 * (1.0 - math.exp(-base_elapsed / 45.0))
         timed_progress = min(0.85, timed_progress)
         self._set_atp_progress(timed_progress)
         self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")

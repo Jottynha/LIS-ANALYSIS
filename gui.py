@@ -4,6 +4,8 @@ import json
 import sys
 import os
 import subprocess
+import time
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -24,13 +26,12 @@ try:
         save_df_to_excel_only,
         calcular_estatisticas_do_df,
         escrever_estatisticas_excel,
-        criar_grafico_a_partir_do_excel,
         criar_grafico_comparativo,
         parse_lis_time_series,
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
-    from atp_simulation import run_atp_simulation
+    from solver.atp_runner import run_atp_solver
     from control_detector import (
         ControlDetector,
         FileControlInfo,
@@ -118,10 +119,15 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
 
+        # Estado da execucao ATP
+        self._atp_running = False
+        self._atp_started_at = None
+        self._atp_timeout_sec = 600
+        self._atp_progress_value = 0.0
+        self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
+
         # Simulacao ATP (.atp)
-        self.atp_solver_var = tk.StringVar(value='')
         self.atp_file_var = tk.StringVar(value='')
-        self.atp_timeout_var = tk.IntVar(value=300)
         
         
         # Opções de visualização de gráficos
@@ -156,9 +162,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.save_logs_var.set(data.get('save_logs', True))
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
-                self.atp_solver_var.set(data.get('atp_solver', ''))
                 self.atp_file_var.set(data.get('atp_file', ''))
-                self.atp_timeout_var.set(int(data.get('atp_timeout', 300)))
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -185,9 +189,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'save_logs': self.save_logs_var.get(),
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
-                'atp_solver': self.atp_solver_var.get(),
                 'atp_file': self.atp_file_var.get(),
-                'atp_timeout': int(self.atp_timeout_var.get()),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -455,29 +457,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        exec_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        exec_card.pack(fill="x", pady=(0, 15))
-
-        ctk.CTkLabel(
-            exec_card,
-            text="Executavel ATP",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
-        ctk.CTkLabel(exec_card, text="Caminho para runATP.exe ou tpbig.exe:").pack(anchor="w", padx=15, pady=(5, 0))
-        exec_frame = ctk.CTkFrame(exec_card, fg_color="transparent")
-        exec_frame.pack(fill="x", padx=15, pady=(5, 15))
-
-        self.atp_exec_entry = ctk.CTkEntry(exec_frame, textvariable=self.atp_solver_var, width=900)
-        self.atp_exec_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
-        ctk.CTkButton(
-            exec_frame,
-            text="Escolher",
-            command=self._choose_atp_solver,
-            width=120
-        ).pack(side="left")
-
         atp_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         atp_card.pack(fill="x", pady=(0, 15))
 
@@ -501,33 +480,20 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=120
         ).pack(side="left")
 
-        params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        params_card.pack(fill="x", pady=(0, 15))
+        info_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        info_card.pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(
-            params_card,
-            text="Parametros (JSON)",
+            info_card,
+            text="Status da Integracao ATP",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
-        self.atp_params_text = ctk.CTkTextbox(params_card, width=1100, height=120)
-        self.atp_params_text.pack(fill="x", padx=15, pady=(0, 15))
-        self.atp_params_text.insert("1.0", "{\n  \"RPI\": 200\n}\n")
-
-        timeout_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        timeout_card.pack(fill="x", pady=(0, 15))
-
         ctk.CTkLabel(
-            timeout_card,
-            text="Timeout (s)",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
-        timeout_frame = ctk.CTkFrame(timeout_card, fg_color="transparent")
-        timeout_frame.pack(fill="x", padx=15, pady=(5, 15))
-
-        ctk.CTkLabel(timeout_frame, text="Tempo maximo de execucao:").pack(side="left", padx=(0, 10))
-        ctk.CTkEntry(timeout_frame, textvariable=self.atp_timeout_var, width=120).pack(side="left")
+            info_card,
+            text="A simulacao usa runATP.exe no mesmo diretorio do arquivo .atp e aguarda o termino da execucao.",
+            justify="left"
+        ).pack(anchor="w", padx=15, pady=(0, 15))
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
@@ -541,20 +507,31 @@ class ModernLisAnalysisApp(ctk.CTk):
         buttons_frame = ctk.CTkFrame(action_card, fg_color="transparent")
         buttons_frame.pack(padx=15, pady=(0, 15))
 
-        ctk.CTkButton(
+        self.atp_run_button = ctk.CTkButton(
             buttons_frame,
-            text="Executar ATP",
+            text="Run Simulation",
             command=self._run_atp_simulation,
             width=200,
             height=40,
             font=ctk.CTkFont(size=14, weight="bold"),
             fg_color="#2196F3",
             hover_color="#1976D2"
-        ).pack(side="left", padx=5)
+        )
+        self.atp_run_button.pack(side="left", padx=5)
+
+        self.atp_progress = ctk.CTkProgressBar(action_card)
+        self.atp_progress.pack(fill="x", padx=15, pady=(0, 8))
+        self.atp_progress.set(0)
+
+        ctk.CTkLabel(
+            action_card,
+            textvariable=self.atp_run_status_var,
+            font=ctk.CTkFont(size=12)
+        ).pack(anchor="w", padx=15, pady=(0, 12))
 
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=160)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
-        self.simulation_results.insert("1.0", "Resultados da simulacao aparecerao aqui...\n")
+        self.simulation_results.insert("1.0", "Aguardando execucao da simulacao ATP...\n")
         self.simulation_results.configure(state="disabled")
     
     def _build_logs_tab(self):
@@ -636,16 +613,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.outdir_var.set(folder)
             self._save_prefs()
 
-    def _choose_atp_solver(self):
-        """Escolher executavel ATP"""
-        file = filedialog.askopenfilename(
-            title="Escolher executavel ATP",
-            filetypes=[("Executaveis", "*.exe *.bat *.cmd"), ("Todos", "*.*")]
-        )
-        if file:
-            self.atp_solver_var.set(file)
-            self._save_prefs()
-
     def _choose_atp_file(self):
         """Escolher arquivo .atp"""
         file = filedialog.askopenfilename(
@@ -667,7 +634,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         outdir = Path(self.outdir_var.get())
         
         if not outdir.exists():
-            messagebox.showinfo("Informação", f"A pasta de saída não existe:\n{outdir}")
+            self._show_info("Informação", "A pasta de saída não existe.", details=[("Pasta", outdir)])
             return
         
         # Contar arquivos
@@ -676,7 +643,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         dirs_count = sum(1 for f in all_files if f.is_dir())
         
         if files_count == 0 and dirs_count == 0:
-            messagebox.showinfo("Informação", "A pasta de saída já está vazia.")
+            self._show_info("Informação", "A pasta de saída já está vazia.")
             return
         
         # Confirmação
@@ -707,11 +674,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.log(f"Erro ao excluir {item.name}: {e}")
             
             self.log(f"Pasta de saída limpa: {deleted_files} arquivo(s), {deleted_dirs} pasta(s) excluída(s)")
-            messagebox.showinfo("Sucesso", f"Pasta limpa com sucesso!\n\n{deleted_files} arquivo(s)\n{deleted_dirs} pasta(s)")
+            self._show_success(
+                "Sucesso",
+                "Pasta limpa com sucesso.",
+                details=[("Resumo", f"{deleted_files} arquivo(s)\n{deleted_dirs} pasta(s)")],
+            )
             
         except Exception as e:
             self.log(f"Erro ao limpar pasta: {e}")
-            messagebox.showerror("Erro", f"Erro ao limpar pasta:\n{str(e)}")
+            self._show_error("Erro", "Erro ao limpar pasta.", details=[("Detalhes", str(e))])
 
     def _cancel_processing(self):
         """Cancelar processamento em andamento"""
@@ -736,9 +707,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             try:
                 content = self.log_textbox.get("1.0", "end")
                 Path(file).write_text(content, encoding='utf-8')
-                messagebox.showinfo("Sucesso", f"Logs salvos em:\n{file}")
+                self._show_success("Sucesso", "Logs salvos com sucesso.", details=[("Arquivo", file)])
             except Exception as e:
-                messagebox.showerror("Erro", f"Falha ao salvar logs:\n{e}")
+                self._show_error("Erro", "Falha ao salvar logs.", details=[("Detalhes", str(e))])
     
     def log(self, message: str):
         """Adiciona mensagem ao log"""
@@ -749,63 +720,409 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.see("end")
         self.log_textbox.configure(state="disabled")
 
-    def _run_atp_simulation(self):
-        """Executar simulacao ATP usando .atp"""
-        solver_path = self.atp_solver_var.get()
-        atp_file = self.atp_file_var.get()
-        outdir = self.outdir_var.get()
-        timeout = int(self.atp_timeout_var.get() or 300)
+    def _show_styled_dialog(self, title: str, message: str, level: str = "info", details: list | None = None):
+        """Exibe dialogo modal customizado com layout mais organizado que messagebox."""
+        palette = {
+            "info": {"accent": "#2563eb"},
+            "success": {"accent": "#15803d"},
+            "warning": {"accent": "#b45309"},
+            "error": {"accent": "#b91c1c"},
+        }
+        cfg = palette.get(level, palette["info"])
 
-        if not solver_path:
-            messagebox.showerror("Erro", "Executavel ATP nao informado")
-            return
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
 
-        if not atp_file or not Path(atp_file).exists():
-            messagebox.showerror("Erro", "Arquivo .atp nao encontrado")
-            return
+        container = ctk.CTkFrame(dialog, corner_radius=12)
+        container.pack(fill="both", expand=True, padx=14, pady=14)
 
-        if not outdir:
-            messagebox.showerror("Erro", "Pasta de saida nao informada")
-            return
+        header = ctk.CTkFrame(container, corner_radius=10, fg_color=cfg["accent"])
+        header.pack(fill="x", padx=12, pady=(12, 8))
 
-        params_text = self.atp_params_text.get("1.0", "end").strip()
-        params = None
-        if params_text:
+        ctk.CTkLabel(
+            header,
+            text=title,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="white",
+            anchor="center",
+            justify="center",
+        ).pack(fill="x", padx=12, pady=10)
+
+        body = ctk.CTkFrame(container, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=14, pady=(4, 8))
+
+        ctk.CTkLabel(
+            body,
+            text=message,
+            justify="left",
+            anchor="w",
+            wraplength=620,
+            font=ctk.CTkFont(size=13),
+        ).pack(fill="x", pady=(0, 8))
+
+        copy_idle_text = "⧉"
+        copy_done_text = "✓"
+        copy_idle_fg = ("#E6E8EB", "#2B3036")
+        copy_idle_hover = ("#D9DDE2", "#353B43")
+        copy_idle_text_color = ("#2D3748", "#DCE3EA")
+        copy_idle_border = ("#C9D1D9", "#4A5568")
+        copy_done_fg = ("#2F6F44", "#2F6F44")
+
+        def _copy_detail(content: str, button=None):
             try:
-                params = json.loads(params_text)
-                if not isinstance(params, dict):
-                    raise ValueError("Parametros devem ser um objeto JSON")
-            except Exception as e:
-                messagebox.showerror("Erro", f"Parametros invalidos: {e}")
+                self.clipboard_clear()
+                self.clipboard_append(content)
+                self.update_idletasks()
+            except Exception:
                 return
 
-        self.log("Iniciando simulacao ATP...")
+            if button is not None:
+                try:
+                    button.configure(
+                        text=copy_done_text,
+                        fg_color=copy_done_fg,
+                        hover_color=copy_done_fg,
+                        text_color="#FFFFFF",
+                        border_width=0,
+                        border_color=copy_done_fg,
+                    )
+                    dialog.after(
+                        1200,
+                        lambda btn=button: btn.winfo_exists()
+                        and btn.configure(
+                            text=copy_idle_text,
+                            fg_color=copy_idle_fg,
+                            hover_color=copy_idle_hover,
+                            text_color=copy_idle_text_color,
+                            border_width=1,
+                            border_color=copy_idle_border,
+                        ),
+                    )
+                except Exception:
+                    pass
+
+        if details:
+            for label, value in details:
+                section = ctk.CTkFrame(body, corner_radius=8)
+                section.pack(fill="x", pady=(6, 6))
+
+                section_header = ctk.CTkFrame(section, fg_color="transparent")
+                section_header.pack(fill="x", padx=10, pady=(8, 2))
+
+                ctk.CTkLabel(
+                    section_header,
+                    text=label,
+                    anchor="w",
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                ).pack(side="left", fill="x", expand=True)
+
+                copy_btn = ctk.CTkButton(
+                    section_header,
+                    text=copy_idle_text,
+                    width=34,
+                    height=24,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    fg_color=copy_idle_fg,
+                    hover_color=copy_idle_hover,
+                    text_color=copy_idle_text_color,
+                    border_width=1,
+                    border_color=copy_idle_border,
+                )
+                copy_btn.pack(side="right")
+                copy_btn.configure(command=lambda v=str(value), btn=copy_btn: _copy_detail(v, btn))
+
+                text_box = ctk.CTkTextbox(section, height=62, wrap="char")
+                text_box.pack(fill="x", padx=10, pady=(0, 8))
+                text_box.insert("1.0", str(value))
+                text_box.configure(state="disabled")
+
+        buttons = ctk.CTkFrame(container, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _close_dialog(_event=None):
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+            self.focus_force()
+
+        ctk.CTkButton(
+            buttons,
+            text="OK",
+            width=120,
+            fg_color=cfg["accent"],
+            hover_color=cfg["accent"],
+            command=_close_dialog,
+        ).pack(pady=2)
+
+        dialog.bind("<Return>", _close_dialog)
+        dialog.bind("<Escape>", _close_dialog)
+
+        dialog.update_idletasks()
+        width = max(560, min(dialog.winfo_reqwidth(), 860))
+        height = max(220, min(dialog.winfo_reqheight(), 620))
+
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        pos_x = parent_x + (parent_w - width) // 2
+        pos_y = parent_y + (parent_h - height) // 2
+        dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        dialog.lift()
+        dialog.focus_force()
+        self.wait_window(dialog)
+
+    def _show_info(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="info", details=details)
+
+    def _show_success(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="success", details=details)
+
+    def _show_warning(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="warning", details=details)
+
+    def _show_error(self, title: str, message: str, details: list | None = None):
+        self._show_styled_dialog(title, message, level="error", details=details)
+
+    def _run_atp_simulation(self):
+        """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
+        if self._atp_running:
+            self._show_info("Simulacao ATP", "Ja existe uma simulacao ATP em andamento.")
+            return
+
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            return
+
+        outdir_str = self.outdir_var.get().strip()
+        if not outdir_str:
+            self._show_error("Erro", "Pasta de saida nao informada.")
+            return
+
+        show_plots = self.show_plots_var.get()
+        hide_errors = self.hide_errors_var.get()
+        only_comparative = self.only_comparative_var.get()
+        plot_options = {
+            'show_bars': self.plot_bars_var.get(),
+            'show_points': self.plot_points_var.get(),
+            'show_gaussian': self.plot_gaussian_var.get(),
+            'show_cumulative': self.plot_cumulative_var.get(),
+            'show_stats_box': self.plot_stats_box_var.get(),
+        }
+
+        self._set_atp_feedback_running()
+        self.status_var.set("Executando simulacao ATP...")
+        self.log(f"Iniciando simulacao ATP para: {atp_file}")
+        self._update_simulation_results("Executando simulacao ATP e pos-processamento... aguarde.\n")
 
         def worker():
-            try:
-                result = run_atp_simulation(
-                    Path(atp_file),
-                    solver_path,
-                    params=params,
-                    output_dir=Path(outdir),
-                    timeout_sec=timeout,
-                )
+            def report_progress(message: str):
+                self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
-                if result.lis_path:
-                    self.log(f"Simulacao concluida: {result.lis_path}")
-                    self._update_simulation_results(
-                        f"Sucesso!\nArquivo .lis: {result.lis_path}\nLog: {result.log_path}"
+            try:
+                import shutil
+
+                report_progress("Running ATP solver...")
+                generated_lis_path = Path(run_atp_solver(atp_file, status_callback=report_progress))
+
+                report_progress("Preparing output folder...")
+                base_outdir = Path(outdir_str)
+                base_outdir.mkdir(parents=True, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                sim_outdir = base_outdir / timestamp
+                sim_outdir.mkdir(parents=True, exist_ok=True)
+
+                lis_target = sim_outdir / generated_lis_path.name
+                if lis_target.exists():
+                    lis_target = sim_outdir / f"{generated_lis_path.stem}_{timestamp}{generated_lis_path.suffix}"
+
+                try:
+                    if generated_lis_path.resolve() != lis_target.resolve():
+                        lis_target = Path(shutil.move(str(generated_lis_path), str(lis_target)))
+                except Exception:
+                    # Se mover falhar, segue com o .lis no caminho original.
+                    lis_target = generated_lis_path
+
+                report_progress("Parsing LIS and generating tables...")
+                df, stats_lines, summary = parse_lis_table(lis_target)
+                if df is None:
+                    raise RuntimeError("Tabela alvo nao encontrada no .lis gerado")
+
+                excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
+                save_df_to_excel_only(df, excel_path)
+
+                try:
+                    computed_stats = calcular_estatisticas_do_df(df)
+                    escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
+                except Exception as e:
+                    if not hide_errors:
+                        report_progress(f"Warning: falha em estatisticas: {e}")
+
+                if not only_comparative:
+                    report_progress("Generating chart from analyzed data...")
+                    graph_name = f"grafico_{lis_target.stem}.png"
+                    self._criar_grafico_customizado(
+                        excel_path,
+                        sim_outdir,
+                        graph_name,
+                        plot_options,
+                        mostrar=show_plots,
                     )
                 else:
-                    self.log("Simulacao falhou")
-                    self._update_simulation_results(
-                        f"Falha na simulacao. Log: {result.log_path}\nStatus: {result.status}"
-                    )
+                    report_progress("Skipping individual chart (only comparative option enabled).")
+
+                report_progress("Processing time series...")
+                try:
+                    time_series_df = parse_lis_time_series(lis_target)
+                    if time_series_df is not None:
+                        save_time_series_to_excel(time_series_df, excel_path)
+                        criar_grafico_series_temporais(
+                            time_series_df,
+                            sim_outdir / f"series_temporais_{lis_target.stem}.png",
+                            lis_name=lis_target.name,
+                            mostrar=show_plots,
+                        )
+                except Exception as e:
+                    if not hide_errors:
+                        report_progress(f"Warning: falha em series temporais: {e}")
+
+                payload = {
+                    "lis_path": str(lis_target),
+                    "outdir": str(sim_outdir),
+                    "excel_path": str(excel_path),
+                }
+                self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
-                self.log(f"Erro: {e}")
-                self._update_simulation_results(f"Erro:\n{str(e)}")
+                error_msg = str(e)
+                self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_atp_progress_message(self, message: str):
+        """Recebe mensagens de progresso do runner ATP no thread principal."""
+        self.log(f"[ATP] {message}")
+
+        text = message.lower()
+        if "process started" in text:
+            self._set_atp_progress(0.03)
+        elif "process finished" in text:
+            self._set_atp_progress(0.88)
+        elif "waiting for lis generation/stabilization" in text:
+            self._set_atp_progress(0.92)
+        elif "lis ready" in text:
+            self._set_atp_progress(0.98)
+
+    def _on_atp_simulation_finished(self, success: bool, payload):
+        """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
+        elapsed = self._set_atp_feedback_finished(success=success)
+
+        if success:
+            lis_path = payload["lis_path"] if isinstance(payload, dict) else str(payload)
+            outdir = payload.get("outdir") if isinstance(payload, dict) else None
+            self.status_var.set("Simulation completed")
+            self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
+            if outdir:
+                self.log(f"Resultados da analise salvos em: {outdir}")
+
+            self._update_simulation_results(
+                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}"
+            )
+
+            if self.save_logs_var.get() and outdir:
+                try:
+                    log_file = Path(outdir) / f"log_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+                    log_content = self.log_textbox.get("1.0", "end")
+                    log_file.write_text(log_content, encoding="utf-8")
+                    self.log(f"Log salvo: {log_file.name}")
+                except Exception as e:
+                    self.log(f"Aviso: nao foi possivel salvar log da simulacao ATP: {e}")
+
+            if self.open_output_var.get() and outdir:
+                _open_in_file_manager(Path(outdir))
+
+            self._show_success(
+                "Simulacao concluida",
+                f"Simulacao finalizada em {elapsed:.1f}s.",
+                details=[
+                    ("Resultados", outdir if outdir else "(nao informado)"),
+                ],
+            )
+        else:
+            self.status_var.set("Pronto")
+            error_msg = str(payload)
+            self.log(f"Erro na simulacao ATP: {error_msg}")
+            self._update_simulation_results(
+                f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
+            )
+            self._show_error(
+                "Erro na simulacao ATP",
+                f"Falha apos {elapsed:.1f}s.",
+                details=[("Detalhes", error_msg)],
+            )
+
+    def _set_atp_feedback_running(self):
+        """Ativa indicadores visuais de simulacao ATP em andamento."""
+        # Reset explicito para nova simulacao (evita manter 100% da execucao anterior).
+        self._atp_running = False
+        self._set_atp_progress(0.0)
+
+        self._atp_running = True
+        self._atp_started_at = time.time()
+        self._set_atp_progress(0.0)
+        self.atp_run_button.configure(state="disabled", text="Executando...")
+        self.atp_run_status_var.set("Status: executando (0s)")
+        self.after(1000, self._tick_atp_running_status)
+
+    def _set_atp_feedback_finished(self, success: bool) -> float:
+        """Desativa indicadores visuais e retorna tempo decorrido."""
+        elapsed = 0.0
+        if self._atp_started_at is not None:
+            elapsed = time.time() - self._atp_started_at
+
+        self._atp_running = False
+        self._atp_started_at = None
+        if success:
+            self._set_atp_progress(1.0)
+        else:
+            self._set_atp_progress(0.0)
+        self.atp_run_button.configure(state="normal", text="Run Simulation")
+
+        if success:
+            self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
+        else:
+            self.atp_run_status_var.set(f"Status: erro ({elapsed:.1f}s)")
+
+        return elapsed
+
+    def _tick_atp_running_status(self):
+        """Atualiza o status de tempo da execucao ATP a cada segundo."""
+        if not self._atp_running or self._atp_started_at is None:
+            return
+
+        elapsed_float = time.time() - self._atp_started_at
+        elapsed = int(elapsed_float)
+        # Inicia do zero e acelera de forma suave apos o primeiro segundo.
+        base_elapsed = max(0.0, elapsed_float - 1.0)
+        timed_progress = 0.80 * (1.0 - math.exp(-base_elapsed / 45.0))
+        timed_progress = min(0.85, timed_progress)
+        self._set_atp_progress(timed_progress)
+        self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")
+        self.after(1000, self._tick_atp_running_status)
+
+    def _set_atp_progress(self, value: float):
+        """Define progresso ATP entre 0 e 1, sem retroceder durante execucao."""
+        clamped = max(0.0, min(1.0, float(value)))
+        if self._atp_running:
+            self._atp_progress_value = max(self._atp_progress_value, clamped)
+        else:
+            self._atp_progress_value = clamped
+        self.atp_progress.set(self._atp_progress_value)
 
     def _update_simulation_results(self, text: str):
         """Atualiza area de resultados da simulacao"""
@@ -927,9 +1244,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             elif os.name == 'nt':
                 os.startfile(str(file_path))
             else:
-                messagebox.showinfo('Abrir arquivo', f'Abra manualmente: {file_path}')
+                self._show_info("Abrir arquivo", "Abra manualmente.", details=[("Arquivo", file_path)])
         except Exception as e:
-            messagebox.showerror('Erro ao abrir', str(e))
+            self._show_error("Erro ao abrir", "Falha ao abrir arquivo.", details=[("Detalhes", str(e))])
     
     def _process_selected(self):
         """Processar arquivos .lis selecionados"""
@@ -940,7 +1257,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 selected_files.append(Path(file_str))
         
         if not selected_files:
-            messagebox.showwarning("Aviso", "Nenhum arquivo selecionado.\n\nMarque os arquivos que deseja processar.")
+            self._show_warning("Aviso", "Nenhum arquivo selecionado.", details=[("Ação", "Marque os arquivos que deseja processar.")])
             return
         
         self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
@@ -1010,7 +1327,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                         error_msg = f"Erro ao calcular estatísticas: {e}"
                         if not self.hide_errors_var.get():
                             self.log(error_msg)
-                            messagebox.showwarning("Aviso", error_msg)
+                            self.after(
+                                0,
+                                lambda msg=error_msg: self._show_warning(
+                                    "Aviso",
+                                    "Falha ao calcular estatisticas.",
+                                    details=[("Detalhes", msg)],
+                                ),
+                            )
                     
                     # Gráfico individual (se não for modo "só comparativo")
                     if not self.only_comparative_var.get():
@@ -1054,11 +1378,25 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if self.open_output_var.get():
                     _open_in_file_manager(outdir)
                 
-                messagebox.showinfo("Sucesso", f"Processamento concluído!\n\n{len(selected_files)} arquivo(s) processado(s)\nResultados em:\n{outdir}")
+                self.after(
+                    0,
+                    lambda total=len(selected_files), result_outdir=str(outdir): self._show_success(
+                        "Processamento concluido",
+                        f"{total} arquivo(s) processado(s) com sucesso.",
+                        details=[("Resultados", result_outdir)],
+                    ),
+                )
                 
             except Exception as e:
                 self.log(f"Erro durante processamento: {e}")
-                messagebox.showerror("Erro", f"Erro durante processamento:\n{str(e)}")
+                self.after(
+                    0,
+                    lambda msg=str(e): self._show_error(
+                        "Erro",
+                        "Erro durante processamento.",
+                        details=[("Detalhes", msg)],
+                    ),
+                )
             finally:
                 self.cancel_btn.pack_forget()
                 self.cancel_event.clear()

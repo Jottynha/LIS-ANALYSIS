@@ -1,74 +1,83 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-from atp_elements import ATPElement
+from typing import Any
 
 
 def _format_value(value: float) -> str:
-    return f"{float(value):.6g}".upper()
+    return f"{float(value):.10g}".upper()
 
 
-def format_element_line(element: ATPElement, newline: str = "\n") -> str:
-    """Formata uma linha de componente ATP em colunas fixas."""
-    if len(element.nodes) < 2:
-        raise ValueError(f"Elemento {element.name} sem nos suficientes para escrita")
+def _leading_whitespace(text: str) -> str:
+    return text[: len(text) - len(text.lstrip(" \t"))]
 
-    name = element.name[:6]
-    node1 = element.nodes[0][:8]
-    node2 = element.nodes[1][:8]
-    value = _format_value(element.get_value())
-    tail = str(element.parameters.get("_tail", "")).strip()
 
-    base = f"{name:<6}{node1:<8}{node2:<8}{value:>12}"
-    if tail:
-        base = f"{base} {tail}"
-    return base.rstrip() + newline
+def format_element_line(element: dict[str, Any], newline: str = "\n") -> str:
+    """Formata linha ATP por tipo de bloco usando colunas fixas simples."""
+    etype = str(element.get("type", "")).lower()
+    raw_line = str(element.get("raw_line", ""))
+    stripped_tokens = raw_line.strip().split()
+    if not stripped_tokens:
+        return raw_line + ("" if raw_line.endswith(("\n", "\r")) else newline)
+
+    indent = _leading_whitespace(raw_line)
+    head = stripped_tokens[0]
+
+    if etype == "branch":
+        r = _format_value(float(element["resistance"]))
+        l = element.get("inductance")
+        if l is None:
+            return f"{indent}{head:<22}{r:>12}".rstrip() + newline
+        l_fmt = _format_value(float(l))
+        return f"{indent}{head:<22}{r:>12}{l_fmt:>12}".rstrip() + newline
+
+    if etype == "switch":
+        t_close = _format_value(float(element["t_close"]))
+        delay = _format_value(float(element["delay"]))
+        return f"{indent}{head:<22}{t_close:>12}{delay:>12}".rstrip() + newline
+
+    if etype == "source":
+        amp = _format_value(float(element["amplitude"]))
+        freq = _format_value(float(element["frequency"]))
+        phase = element.get("phase")
+        if phase is None:
+            return f"{indent}{head:<10}{amp:>16}{freq:>12}".rstrip() + newline
+        phase_fmt = _format_value(float(phase))
+        return f"{indent}{head:<10}{amp:>16}{freq:>12}{phase_fmt:>12}".rstrip() + newline
+
+    return raw_line + ("" if raw_line.endswith(("\n", "\r")) else newline)
 
 
 def write_atp_file(
-    elements: list[ATPElement],
+    elements: list[dict[str, Any]],
     original_lines: list[str],
     output_path: str | Path,
 ) -> Path:
-    """Escreve novo ATP preservando linhas desconhecidas e alterando apenas componentes modificados."""
+    """Escreve novo ATP preservando linhas desconhecidas e reescrevendo linhas editáveis."""
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    by_start = {e.line_index: e for e in elements}
-    consumed_until = -1
+    by_index = {int(e.get("line_index", -1)): e for e in elements if "line_index" in e}
     rendered: list[str] = []
 
     for idx, line in enumerate(original_lines):
-        if idx <= consumed_until:
-            continue
-
-        element = by_start.get(idx)
+        element = by_index.get(idx)
         if element is None:
             rendered.append(line)
             continue
 
-        line_end = max(element.line_end_index, element.line_index)
-        consumed_until = line_end
-
-        if not element.modified:
-            rendered.extend(original_lines[element.line_index : line_end + 1])
-            continue
-
         newline = "\n"
-        first_original = original_lines[element.line_index] if element.line_index < len(original_lines) else ""
-        if first_original.endswith("\r\n"):
+        if line.endswith("\r\n"):
             newline = "\r\n"
-        elif first_original.endswith("\n"):
+        elif line.endswith("\n"):
             newline = "\n"
-        elif first_original:
+        elif line:
             newline = ""
 
-        rendered.append(format_element_line(element, newline=newline))
-
-        # Mantém linhas de continuação originais para evitar perda estrutural não suportada.
-        if line_end > element.line_index:
-            rendered.extend(original_lines[element.line_index + 1 : line_end + 1])
+        try:
+            rendered.append(format_element_line(element, newline=newline))
+        except Exception:
+            rendered.append(line)
 
     out_path.write_text("".join(rendered), encoding="utf-8", errors="replace")
     return out_path

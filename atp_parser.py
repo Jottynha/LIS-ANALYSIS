@@ -3,19 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from atp_elements import ATPElement, element_class_for
-
-SUPPORTED_TYPES = {"R", "L", "C", "V", "I"}
-
 
 class ATPParseError(RuntimeError):
     """Erro de parsing de arquivo ATP."""
-
-
-def _is_continuation_line(line: str) -> bool:
-    if not line:
-        return False
-    return line.startswith(" ") or line.startswith("+")
 
 
 def _parse_float(value: str) -> float:
@@ -23,185 +13,230 @@ def _parse_float(value: str) -> float:
     return float(normalized)
 
 
-def _parse_card_tokens(card_text: str) -> tuple[str, str, str, str, list[str]] | None:
-    tokens = card_text.split()
-    if len(tokens) < 4:
+def _extract_numeric_tokens(tokens: list[str]) -> list[float]:
+    """Extrai tokens numéricos de uma lista de tokens, ignorando texto não numérico."""
+    values: list[float] = []
+    for tok in tokens:
+        try:
+            values.append(_parse_float(tok))
+        except ValueError:
+            continue
+    return values
+
+
+def _parse_branch_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
+    """Parse de linha de /BRANCH preservando ordem dos valores numéricos (R, depois L)."""
+    numeric_values = _extract_numeric_tokens(tokens)
+    if not numeric_values:
         return None
 
-    name = tokens[0].strip()
-    if not name:
-        return None
+    if len(numeric_values) >= 2:
+        resistance = float(numeric_values[0])
+        inductance = float(numeric_values[1])
+    else:
+        resistance = float(numeric_values[0])
+        inductance = None
 
-    card_type = name[0].upper()
-    if card_type not in SUPPORTED_TYPES:
-        return None
-
-    node1 = tokens[1].strip()
-    node2 = tokens[2].strip()
-    value_token = tokens[3].strip()
-
-    if not node1 or not node2 or not value_token:
-        return None
-
-    try:
-        _parse_float(value_token)
-    except ValueError:
-        return None
-
-    tail = tokens[4:] if len(tokens) > 4 else []
-    return card_type, name, node1, node2, [value_token] + tail
-
-
-def _card_value_parameter_name(card_type: str) -> str:
-    mapping = {
-        "R": "resistance",
-        "L": "inductance",
-        "C": "capacitance",
-        "V": "voltage",
-        "I": "current",
+    return {
+        "type": "branch",
+        "resistance": resistance,
+        "inductance": inductance,
+        "raw_line": raw_line,
+        "line_index": line_index,
     }
-    return mapping.get(card_type.upper(), "value")
 
 
-def parse_atp_file(path: str | Path) -> tuple[list[ATPElement], list[str]]:
-    """Lê um arquivo ATP e retorna elementos editáveis e linhas originais."""
+def _parse_switch_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
+    """Parse de linha de /SWITCH: t_close e delay como dois primeiros numéricos da linha."""
+    numeric_values = _extract_numeric_tokens(tokens)
+    if len(numeric_values) < 2:
+        return None
+
+    return {
+        "type": "switch",
+        "t_close": float(numeric_values[0]),
+        "delay": float(numeric_values[1]),
+        "raw_line": raw_line,
+        "line_index": line_index,
+    }
+
+
+def _parse_source_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
+    """Parse de linha de /SOURCE: amplitude, frequência e fase opcional."""
+    numeric_values = _extract_numeric_tokens(tokens)
+    if len(numeric_values) < 2:
+        return None
+
+    phase = float(numeric_values[2]) if len(numeric_values) >= 3 else None
+
+    return {
+        "type": "source",
+        "amplitude": float(numeric_values[0]),
+        "frequency": float(numeric_values[1]),
+        "phase": phase,
+        "raw_line": raw_line,
+        "line_index": line_index,
+    }
+
+
+def parse_atp_file(path: str | Path) -> list[dict[str, Any]]:
+    """Lê um arquivo ATP (ATPDraw) por blocos e retorna elementos editáveis em formato dicionário."""
     atp_path = Path(path)
     if not atp_path.exists():
         raise FileNotFoundError(f"Arquivo ATP nao encontrado: {atp_path}")
 
-    original_lines = atp_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    lines = atp_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    elements: list[dict[str, Any]] = []
+    current_block = ""
 
-    logical_cards: list[dict[str, Any]] = []
-    current_lines: list[str] = []
-    current_start = 0
+    for idx, raw_line in enumerate(lines):
+        line = raw_line.rstrip("\r\n")
+        stripped = line.strip()
 
-    def flush_current(end_index: int) -> None:
-        nonlocal current_lines, current_start
-        if not current_lines:
-            return
-
-        logical_cards.append(
-            {
-                "start": current_start,
-                "end": end_index,
-                "lines": current_lines[:],
-            }
-        )
-        current_lines = []
-
-    for idx, line in enumerate(original_lines):
-        if not current_lines:
-            current_start = idx
-            current_lines.append(line)
+        if not stripped:
             continue
 
-        if _is_continuation_line(line):
-            current_lines.append(line)
+        upper_stripped = stripped.upper()
+        if upper_stripped.startswith("/"):
+            current_block = upper_stripped
             continue
 
-        flush_current(idx - 1)
-        current_start = idx
-        current_lines = [line]
-
-    flush_current(len(original_lines) - 1)
-
-    elements: list[ATPElement] = []
-
-    for card in logical_cards:
-        first_line = card["lines"][0]
-        if not first_line.strip():
+        if stripped.startswith("C "):
             continue
 
-        first_char = first_line[0].upper()
-        if first_char not in SUPPORTED_TYPES:
+        if current_block not in {"/BRANCH", "/SWITCH", "/SOURCE"}:
             continue
 
-        joined_parts = []
-        for raw in card["lines"]:
-            no_nl = raw.rstrip("\r\n")
-            if not joined_parts:
-                joined_parts.append(no_nl)
+        tokens = stripped.split()
+        try:
+            parsed: dict[str, Any] | None
+            if current_block == "/BRANCH":
+                parsed = _parse_branch_line(tokens, raw_line, idx)
+            elif current_block == "/SWITCH":
+                parsed = _parse_switch_line(tokens, raw_line, idx)
             else:
-                joined_parts.append(no_nl.lstrip(" +"))
-        joined_text = " ".join(joined_parts)
+                parsed = _parse_source_line(tokens, raw_line, idx)
 
-        parsed = _parse_card_tokens(joined_text)
-        if parsed is None:
+            if parsed is not None:
+                elements.append(parsed)
+        except Exception:
+            # Linha malformada é ignorada para manter robustez do parser.
             continue
 
-        card_type, name, node1, node2, value_and_tail = parsed
-        value_token = value_and_tail[0]
-        tail_tokens = value_and_tail[1:]
-
-        parameter_name = _card_value_parameter_name(card_type)
-        value = _parse_float(value_token)
-
-        element_cls = element_class_for(card_type)
-        element = element_cls(
-            type=card_type,
-            name=name,
-            nodes=[node1, node2],
-            parameters={
-                parameter_name: value,
-                "_tail": " ".join(tail_tokens),
-                "_value_token": value_token,
-            },
-            raw_line=joined_text,
-            line_index=card["start"],
-            line_end_index=card["end"],
-            continuation_lines=card["lines"][1:],
-            modified=False,
-        )
-        elements.append(element)
-
-    return elements, original_lines
+    return elements
 
 
-def get_editable_parameters(elements: list[ATPElement]) -> list[dict[str, Any]]:
-    """Retorna estrutura amigável para UI com parâmetros editáveis."""
+def get_editable_parameters(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Converte elementos parseados em parâmetros editáveis para a GUI."""
     rows: list[dict[str, Any]] = []
-    for element in elements:
-        parameter_name = element.parameter_name()
-        rows.append(
-            {
-                "line_index": element.line_index,
-                "name": element.name,
-                "type": element.__class__.__name__,
-                "parameter": parameter_name,
-                "value": element.parameters.get(parameter_name),
-            }
-        )
+
+    for idx, element in enumerate(elements):
+        etype = str(element.get("type", "")).lower()
+
+        if etype == "branch":
+            if element.get("resistance") is not None:
+                rows.append(
+                    {
+                        "label": "R (branch)",
+                        "value": float(element["resistance"]),
+                        "element_index": idx,
+                        "field": "resistance",
+                    }
+                )
+            if element.get("inductance") is not None:
+                rows.append(
+                    {
+                        "label": "L (branch)",
+                        "value": float(element["inductance"]),
+                        "element_index": idx,
+                        "field": "inductance",
+                    }
+                )
+
+        elif etype == "switch":
+            if element.get("t_close") is not None:
+                rows.append(
+                    {
+                        "label": "Switch time",
+                        "value": float(element["t_close"]),
+                        "element_index": idx,
+                        "field": "t_close",
+                    }
+                )
+            if element.get("delay") is not None:
+                rows.append(
+                    {
+                        "label": "Switch delay",
+                        "value": float(element["delay"]),
+                        "element_index": idx,
+                        "field": "delay",
+                    }
+                )
+
+        elif etype == "source":
+            if element.get("amplitude") is not None:
+                rows.append(
+                    {
+                        "label": "Amplitude",
+                        "value": float(element["amplitude"]),
+                        "element_index": idx,
+                        "field": "amplitude",
+                    }
+                )
+            if element.get("frequency") is not None:
+                rows.append(
+                    {
+                        "label": "Frequency",
+                        "value": float(element["frequency"]),
+                        "element_index": idx,
+                        "field": "frequency",
+                    }
+                )
+            if element.get("phase") is not None:
+                rows.append(
+                    {
+                        "label": "Phase",
+                        "value": float(element["phase"]),
+                        "element_index": idx,
+                        "field": "phase",
+                    }
+                )
+
     return rows
 
 
 def update_parameter(
-    elements: list[ATPElement],
+    elements: list[dict[str, Any]],
     element_name: str,
     new_value: float | str,
     line_index: int | None = None,
     parameter_name: str | None = None,
-) -> ATPElement:
-    """Atualiza parâmetro de um elemento por nome (e opcionalmente linha/parâmetro)."""
-    matches = [e for e in elements if e.name.lower() == element_name.lower()]
-    if line_index is not None:
-        matches = [e for e in matches if e.line_index == line_index]
+) -> dict[str, Any]:
+    """Atualiza campo numérico de elemento parseado por line_index + campo."""
+    if parameter_name is None:
+        raise ATPParseError("parameter_name e obrigatorio para atualizar elemento por bloco")
 
-    if parameter_name is not None:
-        matches = [e for e in matches if e.parameter_name().lower() == parameter_name.lower()]
-
-    if not matches:
-        raise ATPParseError(f"Elemento nao encontrado para atualizacao: {element_name}")
-
-    if len(matches) > 1:
-        raise ATPParseError(
-            f"Elemento ambiguo '{element_name}'. Informe line_index para diferenciar ocorrencias."
-        )
-
-    element = matches[0]
     try:
         parsed_value = _parse_float(str(new_value))
     except ValueError as exc:
-        raise ATPParseError(f"Valor numerico invalido para {element.name}: {new_value}") from exc
+        raise ATPParseError(f"Valor numerico invalido: {new_value}") from exc
 
-    element.set_value(parsed_value)
-    return element
+    if line_index is None:
+        raise ATPParseError("line_index e obrigatorio para atualizar elemento por bloco")
+
+    match = None
+    for element in elements:
+        if int(element.get("line_index", -1)) == int(line_index):
+            match = element
+            break
+
+    if match is None:
+        raise ATPParseError(f"Elemento nao encontrado para line_index={line_index}")
+
+    if parameter_name not in match:
+        raise ATPParseError(
+            f"Campo '{parameter_name}' nao existe no elemento da linha {line_index}"
+        )
+
+    match[parameter_name] = float(parsed_value)
+    return match

@@ -512,6 +512,13 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=180
         ).pack(side="left")
 
+        ctk.CTkButton(
+            params_actions,
+            text="Baixar TXT",
+            command=self._export_atp_parameters_txt,
+            width=150
+        ).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(
             params_actions,
             textvariable=self.atp_param_status_var,
@@ -689,7 +696,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         try:
-            elements, original_lines = parse_atp_file(atp_file)
+            elements = parse_atp_file(atp_file)
             editable = get_editable_parameters(elements)
         except Exception as e:
             self._clear_atp_parameter_editor()
@@ -699,7 +706,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._clear_atp_parameter_editor()
         self._atp_elements_cache = elements
-        self._atp_original_lines_cache = original_lines
+        self._atp_original_lines_cache = Path(atp_file).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
 
         if not editable:
             self.atp_param_status_var.set("Nenhum componente editavel detectado")
@@ -712,19 +719,18 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.log("[ATP] Nenhum parametro editavel detectado no .atp selecionado")
             return
 
-        parameter_titles = {
-            "resistance": "Resistencia",
-            "inductance": "Indutancia",
-            "capacitance": "Capacitancia",
-            "voltage": "Tensao",
-            "current": "Corrente",
-            "value": "Valor",
-        }
-
         for row in editable:
-            param_name = str(row.get("parameter", "value"))
-            param_label = parameter_titles.get(param_name, param_name)
-            component = f"{row.get('name', '?')} ({row.get('type', 'ATPElement')})"
+            param_name = str(row.get("field", "value"))
+            param_label = str(row.get("label", param_name))
+            element_index = int(row.get("element_index", -1))
+            element_data = (
+                self._atp_elements_cache[element_index]
+                if 0 <= element_index < len(self._atp_elements_cache)
+                else {}
+            )
+            line_index = int(element_data.get("line_index", -1))
+            component_type = str(element_data.get("type", "element")).upper()
+            component = f"Linha {line_index + 1} ({component_type})"
             current_value = row.get("value", "")
             value_str = "" if current_value is None else str(current_value)
 
@@ -743,8 +749,8 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             self._atp_param_rows.append(
                 {
-                    "line_index": int(row.get("line_index", -1)),
-                    "name": str(row.get("name", "")),
+                    "line_index": line_index,
+                    "name": component,
                     "parameter": param_name,
                     "original_value": float(current_value),
                     "entry": entry,
@@ -795,6 +801,80 @@ class ModernLisAnalysisApp(ctk.CTk):
             raise ValueError(f"Valores invalidos no editor de parametros ATP:\n{details}")
 
         return overrides
+
+    def _export_atp_parameters_txt(self):
+        """Exporta para TXT todos os parametros ATP detectados para conferência manual."""
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            return
+
+        if not self._atp_elements_cache:
+            self._load_atp_parameters(show_dialog_errors=False)
+
+        if not self._atp_elements_cache:
+            self._show_warning("Aviso", "Nenhum parametro detectado para exportar.")
+            return
+
+        editable = get_editable_parameters(self._atp_elements_cache)
+        current_values = {
+            (int(row.get("line_index", -1)), str(row.get("parameter", ""))): row["entry"].get().strip()
+            for row in self._atp_param_rows
+        }
+
+        atp_path = Path(atp_file)
+        default_name = f"{atp_path.stem}_parametros_detectados.txt"
+
+        target = filedialog.asksaveasfilename(
+            title="Salvar parametros detectados",
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Texto", "*.txt"), ("Todos", "*.*")],
+        )
+        if not target:
+            return
+
+        lines = [
+            "RELATORIO DE PARAMETROS ATP DETECTADOS",
+            f"Arquivo: {atp_path}",
+            f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            f"Total de elementos detectados: {len(self._atp_elements_cache)}",
+            f"Total de parametros editaveis: {len(editable)}",
+            "",
+        ]
+
+        for idx, element in enumerate(self._atp_elements_cache):
+            line_index = int(element.get("line_index", -1))
+            etype = str(element.get("type", "")).upper()
+            raw_line = str(element.get("raw_line", ""))
+            lines.append(f"[{idx}] Linha {line_index + 1} - {etype}")
+            lines.append(f"RAW: {raw_line}")
+
+            element_params = [p for p in editable if int(p.get("element_index", -1)) == idx]
+            if not element_params:
+                lines.append("  (sem parametros editaveis)")
+                lines.append("")
+                continue
+
+            for param in element_params:
+                field = str(param.get("field", ""))
+                label = str(param.get("label", field))
+                detected = param.get("value")
+                current = current_values.get((line_index, field), "")
+                current_display = current if current != "" else str(detected)
+                lines.append(f"  - {label} [{field}]")
+                lines.append(f"    detectado: {detected}")
+                lines.append(f"    campo_gui: {current_display}")
+
+            lines.append("")
+
+        try:
+            Path(target).write_text("\n".join(lines), encoding="utf-8")
+            self.log(f"[ATP] TXT de parametros exportado: {target}")
+            self._show_success("Sucesso", "TXT de parametros exportado com sucesso.", details=[("Arquivo", target)])
+        except Exception as e:
+            self._show_error("Erro", "Falha ao salvar TXT de parametros.", details=[("Detalhes", str(e))])
     
     
     def _clear_filter(self):
@@ -1111,7 +1191,10 @@ class ModernLisAnalysisApp(ctk.CTk):
                 execution_atp_path = Path(atp_file)
                 if atp_overrides:
                     report_progress("Applying ATP parameter overrides...")
-                    elements, original_lines = parse_atp_file(execution_atp_path)
+                    elements = parse_atp_file(execution_atp_path)
+                    original_lines = execution_atp_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    ).splitlines(keepends=True)
                     for override in atp_overrides:
                         update_parameter(
                             elements,

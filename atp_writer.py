@@ -26,10 +26,17 @@ def format_element_line(element: dict[str, Any], newline: str = "\n") -> str:
     if etype == "branch":
         r = _format_value(float(element["resistance"]))
         l = element.get("inductance")
+        c = element.get("capacitance")
         if l is None:
-            return f"{indent}{head:<22}{r:>12}".rstrip() + newline
+            if c is None:
+                return f"{indent}{head:<22}{r:>12}".rstrip() + newline
+            c_fmt = _format_value(float(c))
+            return f"{indent}{head:<22}{r:>12}{c_fmt:>12}".rstrip() + newline
         l_fmt = _format_value(float(l))
-        return f"{indent}{head:<22}{r:>12}{l_fmt:>12}".rstrip() + newline
+        if c is None:
+            return f"{indent}{head:<22}{r:>12}{l_fmt:>12}".rstrip() + newline
+        c_fmt = _format_value(float(c))
+        return f"{indent}{head:<22}{r:>12}{l_fmt:>12}{c_fmt:>12}".rstrip() + newline
 
     if etype == "switch":
         t_close = _format_value(float(element["t_close"]))

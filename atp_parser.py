@@ -24,8 +24,12 @@ def _extract_numeric_tokens(tokens: list[str]) -> list[float]:
     return values
 
 
-def _parse_branch_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
-    """Parse de linha de /BRANCH preservando ordem dos valores numéricos (R, depois L)."""
+def _parse_branch_line(
+    tokens: list[str],
+    raw_line: str,
+    line_index: int,
+) -> dict[str, Any] | None:
+    """Parse de linha de /BRANCH preservando ordem dos valores numéricos (R, L, C opcional)."""
     numeric_values = _extract_numeric_tokens(tokens)
     if not numeric_values:
         return None
@@ -37,10 +41,22 @@ def _parse_branch_line(tokens: list[str], raw_line: str, line_index: int) -> dic
         resistance = float(numeric_values[0])
         inductance = None
 
+    capacitance = None
+    capacitance_is_control_default = False
+    # Em arquivos ATPDraw, o terceiro valor em /BRANCH pode representar C,
+    # inclusive quando for o valor padrão de controle (0).
+    if len(numeric_values) >= 3:
+        c_candidate = float(numeric_values[2])
+        capacitance = c_candidate
+        if abs(c_candidate) <= 0.0:
+            capacitance_is_control_default = True
+
     return {
         "type": "branch",
         "resistance": resistance,
         "inductance": inductance,
+        "capacitance": capacitance,
+        "capacitance_is_control_default": capacitance_is_control_default,
         "raw_line": raw_line,
         "line_index": line_index,
     }
@@ -111,7 +127,11 @@ def parse_atp_file(path: str | Path) -> list[dict[str, Any]]:
         try:
             parsed: dict[str, Any] | None
             if current_block == "/BRANCH":
-                parsed = _parse_branch_line(tokens, raw_line, idx)
+                parsed = _parse_branch_line(
+                    tokens,
+                    raw_line,
+                    idx,
+                )
             elif current_block == "/SWITCH":
                 parsed = _parse_switch_line(tokens, raw_line, idx)
             else:
@@ -150,6 +170,17 @@ def get_editable_parameters(elements: list[dict[str, Any]]) -> list[dict[str, An
                         "value": float(element["inductance"]),
                         "element_index": idx,
                         "field": "inductance",
+                    }
+                )
+            if element.get("capacitance") is not None:
+                is_default = bool(element.get("capacitance_is_control_default", False))
+                rows.append(
+                    {
+                        "label": "C (branch) - valor padrao (0)" if is_default else "C (branch)",
+                        "value": float(element["capacitance"]),
+                        "element_index": idx,
+                        "field": "capacitance",
+                        "editable": not is_default,
                     }
                 )
 

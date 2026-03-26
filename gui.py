@@ -722,6 +722,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         for row in editable:
             param_name = str(row.get("field", "value"))
             param_label = str(row.get("label", param_name))
+            is_editable = bool(row.get("editable", True))
             element_index = int(row.get("element_index", -1))
             element_data = (
                 self._atp_elements_cache[element_index]
@@ -746,12 +747,15 @@ class ModernLisAnalysisApp(ctk.CTk):
             entry = ctk.CTkEntry(item, width=220)
             entry.pack(side="right", padx=8, pady=8)
             entry.insert(0, value_str)
+            if not is_editable:
+                entry.configure(state="disabled")
 
             self._atp_param_rows.append(
                 {
                     "line_index": line_index,
                     "name": component,
                     "parameter": param_name,
+                    "editable": is_editable,
                     "original_value": float(current_value),
                     "entry": entry,
                 }
@@ -766,6 +770,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         invalid_items = []
 
         for row in self._atp_param_rows:
+            if not bool(row.get("editable", True)):
+                continue
+
             raw = row["entry"].get().strip()
             name = row["name"]
             parameter = row["parameter"]
@@ -863,7 +870,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 detected = param.get("value")
                 current = current_values.get((line_index, field), "")
                 current_display = current if current != "" else str(detected)
+                status = "editavel" if bool(param.get("editable", True)) else "valor_padrao"
                 lines.append(f"  - {label} [{field}]")
+                lines.append(f"    status: {status}")
                 lines.append(f"    detectado: {detected}")
                 lines.append(f"    campo_gui: {current_display}")
 

@@ -1272,36 +1272,41 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                 report_progress("Parsing LIS and generating tables...")
                 df, stats_lines, summary = parse_lis_table(lis_target)
+                excel_path = None
+                table_warning = None
                 if df is None:
-                    raise RuntimeError("Tabela alvo nao encontrada no .lis gerado")
-
-                excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
-                save_df_to_excel_only(df, excel_path)
-
-                try:
-                    computed_stats = calcular_estatisticas_do_df(df)
-                    escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
-                except Exception as e:
-                    if not hide_errors:
-                        report_progress(f"Warning: falha em estatisticas: {e}")
-
-                if not only_comparative:
-                    report_progress("Generating chart from analyzed data...")
-                    graph_name = f"grafico_{lis_target.stem}.png"
-                    self._criar_grafico_customizado(
-                        excel_path,
-                        sim_outdir,
-                        graph_name,
-                        plot_options,
-                        mostrar=show_plots,
-                    )
+                    table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
+                    report_progress(f"Warning: {table_warning}")
                 else:
-                    report_progress("Skipping individual chart (only comparative option enabled).")
+                    excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
+                    save_df_to_excel_only(df, excel_path)
+
+                    try:
+                        computed_stats = calcular_estatisticas_do_df(df)
+                        escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
+                    except Exception as e:
+                        if not hide_errors:
+                            report_progress(f"Warning: falha em estatisticas: {e}")
+
+                    if not only_comparative:
+                        report_progress("Generating chart from analyzed data...")
+                        graph_name = f"grafico_{lis_target.stem}.png"
+                        self._criar_grafico_customizado(
+                            excel_path,
+                            sim_outdir,
+                            graph_name,
+                            plot_options,
+                            mostrar=show_plots,
+                        )
+                    else:
+                        report_progress("Skipping individual chart (only comparative option enabled).")
 
                 report_progress("Processing time series...")
                 try:
                     time_series_df = parse_lis_time_series(lis_target)
                     if time_series_df is not None:
+                        if excel_path is None:
+                            excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
                         save_time_series_to_excel(time_series_df, excel_path)
                         criar_grafico_series_temporais(
                             time_series_df,
@@ -1316,8 +1321,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 payload = {
                     "lis_path": str(lis_target),
                     "outdir": str(sim_outdir),
-                    "excel_path": str(excel_path),
+                    "excel_path": str(excel_path) if excel_path else None,
                     "applied_overrides": len(atp_overrides),
+                    "table_warning": table_warning,
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
@@ -1354,15 +1360,19 @@ class ModernLisAnalysisApp(ctk.CTk):
             lis_path = payload["lis_path"] if isinstance(payload, dict) else str(payload)
             outdir = payload.get("outdir") if isinstance(payload, dict) else None
             overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
+            table_warning = payload.get("table_warning") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
             if outdir:
                 self.log(f"Resultados da analise salvos em: {outdir}")
             if overrides_count:
                 self.log(f"Parametros ATP aplicados nesta execucao: {overrides_count}")
+            if table_warning:
+                self.log(f"Aviso: {table_warning}")
 
             self._update_simulation_results(
                 f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}\nParameter overrides: {overrides_count}"
+                + (f"\nWarning: {table_warning}" if table_warning else "")
             )
 
             if self.save_logs_var.get() and outdir:

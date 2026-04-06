@@ -33,6 +33,81 @@ STAT_TERMINATOR = "End of"
 # regex para números (inteiros, floats, científicos); linguagem usada para definir padrões de busca em textos.
 NUM_RE = re.compile(r'[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?')
 
+START_MARKER_VARIANTS = [
+    "the following is a distribution of peak overvoltages",
+    "the following is a distribution of peak overvoltage",
+]
+END_MARKER_VARIANTS = [
+    "summary of preceding table follows",
+]
+TARGET_DISTRIBUTION_HINTS = [
+    "among all output nodes of the last data card",
+    "same base voltage",
+    "maximum of the peaks at all output nodes",
+]
+
+
+def _contains_any_marker(line: str, markers: List[str]) -> bool:
+    lower_line = line.lower()
+    return any(marker in lower_line for marker in markers)
+
+
+def _extract_summary_from_stats_lines(
+    stats_lines: List[str],
+) -> Dict[str, Tuple[Optional[float], Optional[float]]]:
+    summary: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+    for ln in stats_lines:
+        low = ln.lower()
+        nums = NUM_RE.findall(ln.replace(',', '.'))
+        if 'mean' in low:
+            if len(nums) >= 2:
+                summary['mean'] = (float(nums[0]), float(nums[1]))
+            elif len(nums) == 1:
+                summary['mean'] = (float(nums[0]), None)
+        elif 'variance' in low:
+            if len(nums) >= 2:
+                summary['variance'] = (float(nums[0]), float(nums[1]))
+            elif len(nums) == 1:
+                summary['variance'] = (float(nums[0]), None)
+        elif 'standard deviation' in low:
+            if len(nums) >= 2:
+                summary['std_dev'] = (float(nums[0]), float(nums[1]))
+            elif len(nums) == 1:
+                summary['std_dev'] = (float(nums[0]), None)
+    return summary
+
+
+def _score_distribution_section(header_text: str, table_rows: List[List[float]], stats_lines: List[str]) -> int:
+    """Pontua seções candidatas para selecionar a tabela de distribuição alvo."""
+    score = 0
+
+    lower_header = header_text.lower()
+    for hint in TARGET_DISTRIBUTION_HINTS:
+        if hint in lower_header:
+            score += 100
+
+    if table_rows:
+        score += min(len(table_rows), 80)
+
+        # Candidato mais confiável tende a ter Cumulative não-decrescente.
+        cumulatives = [row[4] for row in table_rows if len(row) >= 5]
+        if cumulatives and all(cumulatives[i] <= cumulatives[i + 1] for i in range(len(cumulatives) - 1)):
+            score += 25
+
+        # Penaliza linhas muito curtas (normalmente falso positivo de parsing).
+        if len(table_rows) < 3:
+            score -= 40
+
+    if stats_lines:
+        score += 10
+
+    return score
+
+
+def _count_target_hints(header_text: str) -> int:
+    lower_header = header_text.lower()
+    return sum(1 for hint in TARGET_DISTRIBUTION_HINTS if hint in lower_header)
+
 # ---------- Detecção de variáveis de saída do .lis ----------
 def parse_lis_output_variables(lis_path: Path) -> List[str]:
     """
@@ -165,61 +240,66 @@ def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], 
     summary_dict (se encontrado) terá chaves: 'mean', 'variance', 'std_dev'
     e valores como tupla (grouped_value_or_None, ungrouped_value_or_None).
     """
-    table_rows = []
-    stats_lines: List[str] = []
-    in_table = False
-
     with lis_path.open('r', errors='replace') as f:
-        for raw_line in f:
-            line = raw_line.rstrip('\n')
-            if (not in_table) and (START_MARKER in line):
-                in_table = True
-                continue
-            if in_table and (END_MARKER in line):
-                in_table = False
-                # coletar linhas de estatísticas brutas (texto) até linha vazia ou STAT_TERMINATOR
-                for stat_raw in f:
-                    stat_line = stat_raw.rstrip('\n')
-                    if stat_line.strip() == "" or STAT_TERMINATOR in stat_line:
-                        break
-                    stats_lines.append(stat_line.replace(',', '.'))
-                break
-            if in_table:
-                clean = line.replace(',', '.')
-                nums = NUM_RE.findall(clean)
-                # exige 6 números por linha
-                if len(nums) >= 6:
-                    try:
-                        row_f = [float(x) for x in nums[:6]]
-                        table_rows.append(row_f)
-                    except ValueError:
-                        continue
+        lines = [raw_line.rstrip('\n') for raw_line in f]
 
-    summary = {}
-    # tenta extrair Mean / Variance / Standard deviation das stats_lines
-    for ln in stats_lines:
-        low = ln.lower()
-        if 'mean' in low:
-            nums = NUM_RE.findall(ln.replace(',', '.'))
-            # pode ter 1 ou 2 números; se 2 => (grouped, ungrouped)
-            if len(nums) >= 2:
-                summary['mean'] = (float(nums[0]), float(nums[1]))
-            elif len(nums) == 1:
-                summary['mean'] = (float(nums[0]), None)
-        elif 'variance' in low:
-            nums = NUM_RE.findall(ln.replace(',', '.'))
-            if len(nums) >= 2:
-                summary['variance'] = (float(nums[0]), float(nums[1]))
-            elif len(nums) == 1:
-                summary['variance'] = (float(nums[0]), None)
-        elif 'standard deviation' in low or 'standard deviation' in ln.lower():
-            nums = NUM_RE.findall(ln.replace(',', '.'))
-            if len(nums) >= 2:
-                summary['std_dev'] = (float(nums[0]), float(nums[1]))
-            elif len(nums) == 1:
-                summary['std_dev'] = (float(nums[0]), None)
-    if not table_rows:
-        return None, stats_lines, summary
+    candidates: List[Tuple[int, int, List[List[float]], List[str], str]] = []
+    idx = 0
+    total_lines = len(lines)
+
+    while idx < total_lines:
+        line = lines[idx]
+        if not (START_MARKER in line or _contains_any_marker(line, START_MARKER_VARIANTS)):
+            idx += 1
+            continue
+
+        header_start = max(0, idx - 2)
+        header_end = min(total_lines, idx + 4)
+        header_text = "\n".join(lines[header_start:header_end])
+
+        table_rows: List[List[float]] = []
+        j = idx + 1
+        while j < total_lines:
+            current = lines[j]
+            if END_MARKER in current or _contains_any_marker(current, END_MARKER_VARIANTS):
+                break
+
+            clean = current.replace(',', '.')
+            nums = NUM_RE.findall(clean)
+            if len(nums) >= 6:
+                try:
+                    table_rows.append([float(x) for x in nums[:6]])
+                except ValueError:
+                    pass
+            j += 1
+
+        stats_lines: List[str] = []
+        k = j + 1
+        while k < total_lines:
+            stat_line = lines[k]
+            if stat_line.strip() == "" or STAT_TERMINATOR in stat_line:
+                break
+            stats_lines.append(stat_line.replace(',', '.'))
+            k += 1
+
+        score = _score_distribution_section(header_text, table_rows, stats_lines)
+        hint_matches = _count_target_hints(header_text)
+        candidates.append((score, hint_matches, table_rows, stats_lines, header_text))
+
+        idx = max(j + 1, idx + 1)
+
+    if not candidates:
+        return None, [], {}
+
+    strong_candidates = [c for c in candidates if c[1] > 0]
+    if not strong_candidates:
+        return None, [], {}
+
+    best_score, _, table_rows, stats_lines, _ = max(strong_candidates, key=lambda item: item[0])
+    if best_score < 0 or not table_rows:
+        return None, stats_lines, _extract_summary_from_stats_lines(stats_lines)
+
+    summary = _extract_summary_from_stats_lines(stats_lines)
 
     df = pd.DataFrame(table_rows, columns=[
         'Interval', 'Voltage_per_unit', 'Voltage_physical',

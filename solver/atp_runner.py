@@ -10,6 +10,26 @@ from typing import Callable, Optional
 ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
 
 
+def _extract_lis_error_excerpt(text: str, context_lines: int = 8) -> str:
+    """Extrai um trecho curto ao redor de mensagens de erro criticas no LIS."""
+    lines = text.splitlines()
+    key_idx = None
+
+    for idx, line in enumerate(lines):
+        low = line.lower()
+        if "kill code" in low or "emtp error stop" in low or "temporary error stop" in low:
+            key_idx = idx
+            break
+
+    if key_idx is None:
+        return ""
+
+    start = max(0, key_idx - 1)
+    end = min(len(lines), key_idx + context_lines)
+    excerpt_lines = [ln.rstrip() for ln in lines[start:end] if ln.strip()]
+    return "\n".join(excerpt_lines)
+
+
 def _detect_lis_fatal_error(lis_path: Path) -> Optional[str]:
     """Retorna mensagem de erro fatal detectada no .lis, ou None se não houver."""
     try:
@@ -34,7 +54,24 @@ def _detect_lis_fatal_error(lis_path: Path) -> Optional[str]:
         )
 
     if "temporary error stop" in lower_text:
-        return "ATP reportou 'Temporary error stop' no arquivo .lis."
+        excerpt = _extract_lis_error_excerpt(text)
+        return (
+            "ATP reportou 'Temporary error stop' no arquivo .lis."
+            + (f"\nTrecho do LIS:\n{excerpt}" if excerpt else "")
+        )
+
+    if "emtp error stop" in lower_text or "kill code" in lower_text:
+        excerpt = _extract_lis_error_excerpt(text)
+        if "carriage return" in lower_text and "line feed" in lower_text:
+            return (
+                "ATP abortou (KILL) por formatacao de fim de linha invalida no .atp gerado "
+                "(CR/LF inconsistente)."
+                + (f"\nTrecho do LIS:\n{excerpt}" if excerpt else "")
+            )
+        return (
+            "ATP abortou com EMTP error stop (KILL code) no arquivo .lis."
+            + (f"\nTrecho do LIS:\n{excerpt}" if excerpt else "")
+        )
 
     return None
 

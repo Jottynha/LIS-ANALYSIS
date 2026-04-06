@@ -1432,6 +1432,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         else:
             self.status_var.set("Pronto")
             error_msg = str(payload)
+            details = [("Detalhes", error_msg)]
+
+            marker = "Trecho do LIS:"
+            if marker in error_msg:
+                head, excerpt = error_msg.split(marker, 1)
+                details = [("Motivo", head.strip())]
+                excerpt_text = excerpt.strip()
+                if excerpt_text:
+                    details.append(("Trecho do LIS", excerpt_text))
+
             self.log(f"Erro na simulacao ATP: {error_msg}")
             self._update_simulation_results(
                 f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
@@ -1439,7 +1449,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error(
                 "Erro na simulacao ATP",
                 f"Falha apos {elapsed:.1f}s.",
-                details=[("Detalhes", error_msg)],
+                details=details,
             )
 
     def _set_atp_feedback_running(self):

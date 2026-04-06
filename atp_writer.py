@@ -121,7 +121,10 @@ def write_atp_file(
             overrides_by_line.setdefault(line_index, []).append(change)
 
     rendered_lines = apply_parameter_overrides(original_lines, overrides_by_line)
-    out_path.write_text("".join(rendered_lines), encoding="latin-1", errors="replace")
+    # newline="" evita tradução automática de \n para CRLF no Windows,
+    # preservando exatamente os terminadores já presentes em original_lines.
+    with out_path.open("w", encoding="latin-1", errors="replace", newline="") as f:
+        f.write("".join(rendered_lines))
     return out_path
 
 

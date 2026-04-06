@@ -1,26 +1,42 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _fit_value_to_width(new_value: float, width: int) -> tuple[str, bool]:
+def _fit_value_to_width(
+    new_value: float,
+    width: int,
+    prefer_integer_with_dot: bool = False,
+) -> tuple[str, bool]:
     """Formata valor para caber em largura fixa, alinhado à direita."""
     if width <= 0:
         return "", False
 
+    value = float(new_value)
     candidates = [
-        f"{float(new_value):.10g}",
-        f"{float(new_value):.8g}",
-        f"{float(new_value):.6g}",
-        f"{float(new_value):.4g}",
-        f"{float(new_value):.3e}",
+        f"{value:.10g}",
+        f"{value:.8g}",
+        f"{value:.6g}",
+        f"{value:.4g}",
+        f"{value:.3e}",
     ]
 
-    for c in candidates:
+    if prefer_integer_with_dot and value.is_integer():
+        int_with_dot = f"{int(value)}."
+        candidates.insert(0, int_with_dot)
+
+    # Remove duplicatas preservando ordem.
+    deduped_candidates: list[str] = []
+    for candidate in candidates:
+        if candidate not in deduped_candidates:
+            deduped_candidates.append(candidate)
+
+    for c in deduped_candidates:
         if len(c) <= width:
             return c.rjust(width), False
 
@@ -36,7 +52,13 @@ def replace_value_in_line(line: str, start: int, end: int, new_value: float) -> 
 
     field = line[start:end]
     width = len(field)
-    formatted, truncated = _fit_value_to_width(new_value, width)
+    # Ex.: se o campo original era "5.", preservar estilo para "8.".
+    prefer_integer_with_dot = re.match(r"^[+-]?\d+\.$", field.strip()) is not None
+    formatted, truncated = _fit_value_to_width(
+        new_value,
+        width,
+        prefer_integer_with_dot=prefer_integer_with_dot,
+    )
     if truncated:
         logger.warning(
             "Valor %.12g truncado para caber no campo [%s:%s] largura=%s",

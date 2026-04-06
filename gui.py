@@ -91,6 +91,12 @@ def _open_in_file_manager(path: Path):
         messagebox.showerror('Erro ao abrir', str(e))
 
 
+def _read_text_lines_preserve_newlines(path: Path) -> list[str]:
+    """Lê arquivo texto preservando terminadores de linha originais."""
+    with path.open("r", encoding="latin-1", errors="replace", newline="") as f:
+        return f.read().splitlines(keepends=True)
+
+
 class ModernLisAnalysisApp(ctk.CTk):
     def __init__(self, folder: Path, outdir: Path, start_index: int = 1):
         super().__init__()
@@ -706,7 +712,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._clear_atp_parameter_editor()
         self._atp_elements_cache = elements
-        self._atp_original_lines_cache = Path(atp_file).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        self._atp_original_lines_cache = _read_text_lines_preserve_newlines(Path(atp_file))
 
         if not editable:
             self.atp_param_status_var.set("Nenhum componente editavel detectado")
@@ -1201,9 +1207,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if atp_overrides:
                     report_progress("Applying ATP parameter overrides...")
                     elements = parse_atp_file(execution_atp_path)
-                    original_lines = execution_atp_path.read_text(
-                        encoding="utf-8", errors="replace"
-                    ).splitlines(keepends=True)
+                    original_lines = _read_text_lines_preserve_newlines(execution_atp_path)
                     for override in atp_overrides:
                         update_parameter(
                             elements,

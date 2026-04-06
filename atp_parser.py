@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,32 +25,75 @@ def _extract_numeric_tokens(tokens: list[str]) -> list[float]:
     return values
 
 
+def _extract_numeric_fields(line: str) -> list[dict[str, Any]]:
+    """Extrai campos numéricos com posição [start:end] no texto original da linha."""
+    fields: list[dict[str, Any]] = []
+    for match in re.finditer(r"\S+", line):
+        token = match.group(0)
+        try:
+            value = _parse_float(token)
+        except ValueError:
+            continue
+        fields.append(
+            {
+                "value": float(value),
+                "start": match.start(),
+                "end": match.end(),
+                "text": token,
+            }
+        )
+    return fields
+
+
+def _mk_param(value: float, field: dict[str, Any], editable: bool = True) -> dict[str, Any]:
+    return {
+        "value": float(value),
+        "original_value": float(value),
+        "start": int(field["start"]),
+        "end": int(field["end"]),
+        "editable": bool(editable),
+        "changed": False,
+    }
+
+
 def _parse_branch_line(
     tokens: list[str],
     raw_line: str,
     line_index: int,
 ) -> dict[str, Any] | None:
     """Parse de linha de /BRANCH preservando ordem dos valores numéricos (R, L, C opcional)."""
-    numeric_values = _extract_numeric_tokens(tokens)
-    if not numeric_values:
+    numeric_fields = _extract_numeric_fields(raw_line)
+    if not numeric_fields:
         return None
 
-    if len(numeric_values) >= 2:
-        resistance = float(numeric_values[0])
-        inductance = float(numeric_values[1])
+    if len(numeric_fields) >= 2:
+        resistance = float(numeric_fields[0]["value"])
+        inductance = float(numeric_fields[1]["value"])
     else:
-        resistance = float(numeric_values[0])
+        resistance = float(numeric_fields[0]["value"])
         inductance = None
 
     capacitance = None
     capacitance_is_control_default = False
     # Em arquivos ATPDraw, o terceiro valor em /BRANCH pode representar C,
     # inclusive quando for o valor padrão de controle (0).
-    if len(numeric_values) >= 3:
-        c_candidate = float(numeric_values[2])
+    if len(numeric_fields) >= 3:
+        c_candidate = float(numeric_fields[2]["value"])
         capacitance = c_candidate
         if abs(c_candidate) <= 0.0:
             capacitance_is_control_default = True
+
+    params: dict[str, dict[str, Any]] = {
+        "resistance": _mk_param(resistance, numeric_fields[0], editable=True)
+    }
+    if inductance is not None:
+        params["inductance"] = _mk_param(inductance, numeric_fields[1], editable=True)
+    if capacitance is not None and len(numeric_fields) >= 3:
+        params["capacitance"] = _mk_param(
+            capacitance,
+            numeric_fields[2],
+            editable=not capacitance_is_control_default,
+        )
 
     return {
         "type": "branch",
@@ -57,6 +101,7 @@ def _parse_branch_line(
         "inductance": inductance,
         "capacitance": capacitance,
         "capacitance_is_control_default": capacitance_is_control_default,
+        "parameters": params,
         "raw_line": raw_line,
         "line_index": line_index,
     }
@@ -64,14 +109,21 @@ def _parse_branch_line(
 
 def _parse_switch_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
     """Parse de linha de /SWITCH: t_close e delay como dois primeiros numéricos da linha."""
-    numeric_values = _extract_numeric_tokens(tokens)
-    if len(numeric_values) < 2:
+    numeric_fields = _extract_numeric_fields(raw_line)
+    if len(numeric_fields) < 2:
         return None
+
+    t_close = float(numeric_fields[0]["value"])
+    delay = float(numeric_fields[1]["value"])
 
     return {
         "type": "switch",
-        "t_close": float(numeric_values[0]),
-        "delay": float(numeric_values[1]),
+        "t_close": t_close,
+        "delay": delay,
+        "parameters": {
+            "t_close": _mk_param(t_close, numeric_fields[0], editable=True),
+            "delay": _mk_param(delay, numeric_fields[1], editable=True),
+        },
         "raw_line": raw_line,
         "line_index": line_index,
     }
@@ -79,17 +131,27 @@ def _parse_switch_line(tokens: list[str], raw_line: str, line_index: int) -> dic
 
 def _parse_source_line(tokens: list[str], raw_line: str, line_index: int) -> dict[str, Any] | None:
     """Parse de linha de /SOURCE: amplitude, frequência e fase opcional."""
-    numeric_values = _extract_numeric_tokens(tokens)
-    if len(numeric_values) < 2:
+    numeric_fields = _extract_numeric_fields(raw_line)
+    if len(numeric_fields) < 2:
         return None
 
-    phase = float(numeric_values[2]) if len(numeric_values) >= 3 else None
+    amplitude = float(numeric_fields[0]["value"])
+    frequency = float(numeric_fields[1]["value"])
+    phase = float(numeric_fields[2]["value"]) if len(numeric_fields) >= 3 else None
+
+    params: dict[str, dict[str, Any]] = {
+        "amplitude": _mk_param(amplitude, numeric_fields[0], editable=True),
+        "frequency": _mk_param(frequency, numeric_fields[1], editable=True),
+    }
+    if phase is not None:
+        params["phase"] = _mk_param(phase, numeric_fields[2], editable=True)
 
     return {
         "type": "source",
-        "amplitude": float(numeric_values[0]),
-        "frequency": float(numeric_values[1]),
+        "amplitude": amplitude,
+        "frequency": frequency,
         "phase": phase,
+        "parameters": params,
         "raw_line": raw_line,
         "line_index": line_index,
     }
@@ -270,4 +332,10 @@ def update_parameter(
         )
 
     match[parameter_name] = float(parsed_value)
+    params = match.get("parameters")
+    if isinstance(params, dict) and parameter_name in params:
+        params[parameter_name]["value"] = float(parsed_value)
+        params[parameter_name]["changed"] = abs(
+            float(parsed_value) - float(params[parameter_name].get("original_value", parsed_value))
+        ) > 1e-15
     return match

@@ -1,58 +1,89 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
-
-def _format_value(value: float) -> str:
-    return f"{float(value):.10g}".upper()
+logger = logging.getLogger(__name__)
 
 
-def _leading_whitespace(text: str) -> str:
-    return text[: len(text) - len(text.lstrip(" \t"))]
+def _fit_value_to_width(new_value: float, width: int) -> tuple[str, bool]:
+    """Formata valor para caber em largura fixa, alinhado à direita."""
+    if width <= 0:
+        return "", False
+
+    candidates = [
+        f"{float(new_value):.10g}",
+        f"{float(new_value):.8g}",
+        f"{float(new_value):.6g}",
+        f"{float(new_value):.4g}",
+        f"{float(new_value):.3e}",
+    ]
+
+    for c in candidates:
+        if len(c) <= width:
+            return c.rjust(width), False
+
+    # Truncamento de segurança: nunca expande a linha.
+    raw = candidates[-1]
+    return raw[-width:].rjust(width), True
 
 
-def format_element_line(element: dict[str, Any], newline: str = "\n") -> str:
-    """Formata linha ATP por tipo de bloco usando colunas fixas simples."""
-    etype = str(element.get("type", "")).lower()
-    raw_line = str(element.get("raw_line", ""))
-    stripped_tokens = raw_line.strip().split()
-    if not stripped_tokens:
-        return raw_line + ("" if raw_line.endswith(("\n", "\r")) else newline)
+def replace_value_in_line(line: str, start: int, end: int, new_value: float) -> str:
+    """Substitui apenas o trecho [start:end], mantendo tamanho/alinhamento do campo."""
+    if start < 0 or end < start or end > len(line):
+        return line
 
-    indent = _leading_whitespace(raw_line)
-    head = stripped_tokens[0]
+    field = line[start:end]
+    width = len(field)
+    formatted, truncated = _fit_value_to_width(new_value, width)
+    if truncated:
+        logger.warning(
+            "Valor %.12g truncado para caber no campo [%s:%s] largura=%s",
+            float(new_value),
+            start,
+            end,
+            width,
+        )
 
-    if etype == "branch":
-        r = _format_value(float(element["resistance"]))
-        l = element.get("inductance")
-        c = element.get("capacitance")
-        if l is None:
-            if c is None:
-                return f"{indent}{head:<22}{r:>12}".rstrip() + newline
-            c_fmt = _format_value(float(c))
-            return f"{indent}{head:<22}{r:>12}{c_fmt:>12}".rstrip() + newline
-        l_fmt = _format_value(float(l))
-        if c is None:
-            return f"{indent}{head:<22}{r:>12}{l_fmt:>12}".rstrip() + newline
-        c_fmt = _format_value(float(c))
-        return f"{indent}{head:<22}{r:>12}{l_fmt:>12}{c_fmt:>12}".rstrip() + newline
+    return line[:start] + formatted + line[end:]
 
-    if etype == "switch":
-        t_close = _format_value(float(element["t_close"]))
-        delay = _format_value(float(element["delay"]))
-        return f"{indent}{head:<22}{t_close:>12}{delay:>12}".rstrip() + newline
 
-    if etype == "source":
-        amp = _format_value(float(element["amplitude"]))
-        freq = _format_value(float(element["frequency"]))
-        phase = element.get("phase")
-        if phase is None:
-            return f"{indent}{head:<10}{amp:>16}{freq:>12}".rstrip() + newline
-        phase_fmt = _format_value(float(phase))
-        return f"{indent}{head:<10}{amp:>16}{freq:>12}{phase_fmt:>12}".rstrip() + newline
+def apply_parameter_overrides(lines: list[str], overrides: dict[int, list[dict[str, Any]]]) -> list[str]:
+    """Aplica alterações no .atp sem quebrar alinhamento, editando por posição."""
+    new_lines = list(lines)
 
-    return raw_line + ("" if raw_line.endswith(("\n", "\r")) else newline)
+    for line_index, changes in overrides.items():
+        if line_index < 0 or line_index >= len(new_lines):
+            continue
+
+        original_line = new_lines[line_index]
+        updated_line = original_line
+
+        # Direita -> esquerda para não deslocar índices.
+        ordered = sorted(changes, key=lambda c: int(c.get("start", -1)), reverse=True)
+        for change in ordered:
+            if not bool(change.get("editable", True)):
+                continue
+
+            start = int(change.get("start", -1))
+            end = int(change.get("end", -1))
+            old_value = change.get("old_value")
+            new_value = float(change.get("new_value"))
+            field_name = str(change.get("field", "value"))
+
+            updated_line = replace_value_in_line(updated_line, start, end, new_value)
+            logger.info(
+                "Linha %s: %s alterado de %s para %s",
+                line_index + 1,
+                field_name,
+                old_value,
+                new_value,
+            )
+
+        new_lines[line_index] = updated_line
+
+    return new_lines
 
 
 def write_atp_file(
@@ -60,31 +91,67 @@ def write_atp_file(
     original_lines: list[str],
     output_path: str | Path,
 ) -> Path:
-    """Escreve novo ATP preservando linhas desconhecidas e reescrevendo linhas editáveis."""
+    """Escreve novo ATP aplicando somente alterações pontuais de parâmetros por posição."""
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    by_index = {int(e.get("line_index", -1)): e for e in elements if "line_index" in e}
-    rendered: list[str] = []
-
-    for idx, line in enumerate(original_lines):
-        element = by_index.get(idx)
-        if element is None:
-            rendered.append(line)
+    overrides_by_line: dict[int, list[dict[str, Any]]] = {}
+    for element in elements:
+        line_index = int(element.get("line_index", -1))
+        params = element.get("parameters", {})
+        if not isinstance(params, dict):
             continue
 
-        newline = "\n"
-        if line.endswith("\r\n"):
-            newline = "\r\n"
-        elif line.endswith("\n"):
-            newline = "\n"
-        elif line:
-            newline = ""
+        for field_name, meta in params.items():
+            if not isinstance(meta, dict):
+                continue
+            if not bool(meta.get("changed", False)):
+                continue
+            if not bool(meta.get("editable", True)):
+                continue
 
-        try:
-            rendered.append(format_element_line(element, newline=newline))
-        except Exception:
-            rendered.append(line)
+            change = {
+                "field": field_name,
+                "start": int(meta.get("start", -1)),
+                "end": int(meta.get("end", -1)),
+                "old_value": meta.get("original_value", meta.get("value")),
+                "new_value": float(meta.get("value")),
+                "editable": bool(meta.get("editable", True)),
+            }
+            overrides_by_line.setdefault(line_index, []).append(change)
 
-    out_path.write_text("".join(rendered), encoding="utf-8", errors="replace")
+    rendered_lines = apply_parameter_overrides(original_lines, overrides_by_line)
+    out_path.write_text("".join(rendered_lines), encoding="latin-1", errors="replace")
     return out_path
+
+
+def assert_identity_when_no_overrides(elements: list[dict[str, Any]], original_lines: list[str]) -> None:
+    """Valida que não há diferenças byte a byte quando nenhum parâmetro foi alterado."""
+    overrides_by_line: dict[int, list[dict[str, Any]]] = {}
+    for element in elements:
+        line_index = int(element.get("line_index", -1))
+        params = element.get("parameters", {})
+        if not isinstance(params, dict):
+            continue
+        for field_name, meta in params.items():
+            if not isinstance(meta, dict):
+                continue
+            if not bool(meta.get("changed", False)):
+                continue
+            if not bool(meta.get("editable", True)):
+                continue
+            change = {
+                "field": field_name,
+                "start": int(meta.get("start", -1)),
+                "end": int(meta.get("end", -1)),
+                "old_value": meta.get("original_value", meta.get("value")),
+                "new_value": float(meta.get("value")),
+                "editable": bool(meta.get("editable", True)),
+            }
+            overrides_by_line.setdefault(line_index, []).append(change)
+
+    new_lines = apply_parameter_overrides(original_lines, overrides_by_line)
+    if b"".join(s.encode("latin-1", errors="replace") for s in new_lines) != b"".join(
+        s.encode("latin-1", errors="replace") for s in original_lines
+    ):
+        raise AssertionError("Roundtrip sem alterações não preservou bytes do arquivo ATP")

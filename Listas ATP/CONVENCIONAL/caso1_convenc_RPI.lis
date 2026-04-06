@@ -1,0 +1,45 @@
+   ---   40   cards of disk file read into card cache cells  1   onward.
+ <===> Done with  "/"-card sorting by data class.    Remember that the source file appears different from interpreted input data.
+Alternative Transients Program (ATP),  F77 GNU Linux or DOS.  All rights reserved by Can/Am user group of Portland, Oregon, USA.
+ Date (dd-mth-yy) and time of day (hh.mm.ss) = 11-Nov-18  11.00.00    Name of disk plot file, if any, is
+Consult the 860-page ATP Rule Book of the Can/Am EMTP User Group in Portland,  Oregon, USA.  Source code date is
+Total size of LABCOM tables = 16446853 INTEGER words.  31 VARDIM  List Sizes follow:  6002  10K  192K  900  420K  1200  15K
+  120K  2250  3800  720  2K  72800  510  800K  800  90  254  800K  100K  3K  15K  192K  120  45K  260K  600  210K  1100  19  200K
+--------------------------------------------------+--------------------------------------------------------------------------------
+Descriptive interpretation of input data cards.   |  Input data card images are shown below, all 80 columns, character by character
+                                                  0         1         2         3         4         5         6         7         8
+                                                  012345678901234567890123456789012345678901234567890123456789012345678901234567890
+--------------------------------------------------+--------------------------------------------------------------------------------
+Comment card.   KOMPAR > 0.                       |C data:caso1_convenc_RPI.atp
+Marker card preceding new EMTP data case.         |BEGIN NEW DATA CASE
+Comment card.   KOMPAR > 0.                       |C $DUMMY, XYZ000
+Misc. data.     1.000E-06   2.000E-01   0.000E+00 |   1.E-6      .2
+Misc. data.  500  1  0  0  1  0  0  1  300  0     |     500       1       0       0       1       0       0       1     300
+Statistics data.      1    1    0    0    1    0  |       1       1       0       0       1      -1                               0
+Series R-L-C.   5.000E+00  7.500E-02  0.000E+00   |  X0001AX0005A                5.   75.                                         0
+Series R-L-C.   5.000E+00  7.500E-02  0.000E+00   |  X0001BX0005B                5.   75.                                         0
+Series R-L-C.   5.000E+00  7.500E-02  0.000E+00   |  X0001CX0005C                5.   75.                                         0
+Series R-L-C.   2.000E+02  0.000E+00  0.000E+00   |  X0005AX0001A              200.                                               0
+Series R-L-C.   2.000E+02  0.000E+00  0.000E+00   |  X0005BX0001B              200.                                               0
+Series R-L-C.   2.000E+02  0.000E+00  0.000E+00   |  X0005CX0001C              200.                                               0
+Series R-L-C.   3.000E+02  0.000E+00  0.000E+00   |  X0002AX0004A              300.                                               0
+Series R-L-C.   3.000E+02  0.000E+00  0.000E+00   |  X0002BX0004B              300.                                               0
+Series R-L-C.   3.000E+02  0.000E+00  0.000E+00   |  X0002CX0004C              300.                                               0
+Dynamic $INCLUDE uses fixed RAM cache to delay.   |$INSERT, C:\Users\pedro\Downloads\ACP\CONV1.pch
+      ----  Error during connection of disk file of $INSERT.  Halt in INSERT.
+ Temporary error stop in  ENTRY STOPTP of "WINDOW".     NCHAIN, LASTOV =      3     1
+               12345678901234567890123456789012345678901234567890123456789012345678901234567890
+ ABUFF(1:80) = $INSERT, C:\USERS\PEDRO\DOWNLOADS\ACP\CONV1.PCH
+
+------------------------------------------------------------------------------------------------------------------------------------
+ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/
+ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/
+------------------------------------------------------------------------------------------------------------------------------------
+
+This is not actually a  KILL  error termination.  But ATP now will try to continue as if it were.  A recursive  CALL  is involved.
+
+------------------------------------------------------------------------------------------------------------------------------------
+ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/
+ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/ERROR/
+------------------------------------------------------------------------------------------------------------------------------------
+

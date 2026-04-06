@@ -31,7 +31,7 @@ try:
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
-    from solver.atp_runner import run_atp_solver
+    from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
     from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
     from atp_writer import write_atp_file
     from control_detector import (
@@ -1168,6 +1168,35 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error("Erro", "Arquivo .atp nao encontrado.")
             return
 
+        missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
+        if missing_insert_dependencies:
+            preview_limit = 10
+            preview = missing_insert_dependencies[:preview_limit]
+            details = [
+                ("Arquivo ATP", atp_file),
+                ("Diretorio base", str(Path(atp_file).parent)),
+                ("Dependencias ausentes", str(len(missing_insert_dependencies))),
+            ]
+            for line_no, target in preview:
+                details.append((f"Linha {line_no}", target))
+            if len(missing_insert_dependencies) > preview_limit:
+                details.append(("Outros", f"+{len(missing_insert_dependencies) - preview_limit} item(ns)"))
+
+            self.log("Validacao pre-run ATP falhou: dependencia(s) $INSERT ausente(s).")
+            for line_no, target in missing_insert_dependencies:
+                self.log(f" - Linha {line_no}: {target}")
+
+            self._update_simulation_results(
+                "Falha na validacao pre-run ATP:\n"
+                + "\n".join([f"- Linha {line_no}: {target}" for line_no, target in missing_insert_dependencies])
+            )
+            self._show_error(
+                "Dependencias ATP ausentes",
+                "Nao e possivel iniciar a simulacao. Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s).",
+                details=details,
+            )
+            return
+
         outdir_str = self.outdir_var.get().strip()
         if not outdir_str:
             self._show_error("Erro", "Pasta de saida nao informada.")
@@ -1227,7 +1256,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                     report_progress(f"Parameterized ATP ready: {execution_atp_path.name}")
 
                 report_progress("Running ATP solver...")
-                generated_lis_path = Path(run_atp_solver(str(execution_atp_path), status_callback=report_progress))
+                generated_lis_path = Path(
+                    run_atp_solver(
+                        str(execution_atp_path),
+                        timeout=self._atp_timeout_sec,
+                        status_callback=report_progress,
+                    )
+                )
 
                 report_progress("Preparing output folder...")
                 base_outdir = Path(outdir_str)

@@ -16,9 +16,28 @@ analysis = Analysis(
     ],
     hiddenimports=[],
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={
+        # Mantem apenas backends realmente usados pela aplicacao.
+        'matplotlib': {
+            'backends': ['TkAgg', 'Agg'],
+        },
+    },
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        # Toolkits alternativos de GUI não usados.
+        'PyQt5',
+        'PyQt6',
+        'PySide2',
+        'PySide6',
+        'wx',
+        'gi',
+        'PyGObject',
+        # Pacotes de notebook/experimentos não usados em runtime.
+        'IPython',
+        'jupyter',
+        'notebook',
+        'pytest',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

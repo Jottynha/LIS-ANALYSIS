@@ -835,14 +835,22 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         if element_type in {"branch", "switch"}:
             if len(node_matches) >= 2:
-                return f"{node_matches[0]} -> {node_matches[1]}"
+                return f"{node_matches[0]} → {node_matches[1]}"
             if len(first_token) >= 12:
-                return f"{first_token[:6]} -> {first_token[6:12]}"
+                return f"{first_token[:6]} → {first_token[6:12]}"
         elif element_type == "source":
             if node_matches:
                 return node_matches[0]
 
         return first_token if first_token else "Nao identificado"
+
+    def _validate_numeric_input(self, new_value: str) -> bool:
+        """Validação de entrada para bloquear caracteres inválidos em campos numéricos ATP."""
+        if new_value == "":
+            return True
+
+        pattern = r"^-?\d*\.?\d*$"
+        return re.match(pattern, new_value) is not None
 
     def _is_non_negative_parameter(self, param_name: str) -> bool:
         return param_name in {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
@@ -973,6 +981,19 @@ class ModernLisAnalysisApp(ctk.CTk):
         row["var"].set(self._format_param_value(float(new_value), keep_trailing_dot=row["keep_trailing_dot"]))
         row["_updating"] = False
         self._update_atp_parameter_row(row, source="buttons")
+
+    def _reset_single_atp_parameter(self, row: dict):
+        """Reseta um único parâmetro para valor original e remove override correspondente."""
+        row["_updating"] = True
+        original = float(row["original_value"])
+        row["var"].set(self._format_param_value(original, keep_trailing_dot=row["keep_trailing_dot"]))
+        row["_updating"] = False
+        row["invalid"] = False
+
+        key = (int(row["line_index"]), str(row["parameter"]))
+        self.parameter_overrides.pop(key, None)
+        self._set_atp_row_visual_state(row, "normal")
+        self._refresh_atp_param_status()
 
     def _repeat_adjust_tick(self, row: dict):
         direction = int(row.get("_repeat_direction", 0))
@@ -1189,6 +1210,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if editable_params:
                 grouped_elements[etype].append((element, editable_params))
 
+        vcmd_numeric = (self.register(self._validate_numeric_input), "%P")
         total_cards = 0
         for etype in ("branch", "switch", "source"):
             items = grouped_elements.get(etype, [])
@@ -1232,22 +1254,25 @@ class ModernLisAnalysisApp(ctk.CTk):
             for element, editable_params in items:
                 element_id = self._extract_element_identifier(element)
                 title_prefix = etype.upper()
-                card = ctk.CTkFrame(section_body, corner_radius=8)
-                card.pack(fill="x", padx=10, pady=6)
+                card = ctk.CTkFrame(section_body, corner_radius=10, fg_color=("#EDEFF3", "#2B3138"))
+                card.pack(fill="x", padx=10, pady=(8, 12))
                 total_cards += 1
 
-                ctk.CTkLabel(
-                    card,
-                    text=f"[{title_prefix} {element_id}]",
-                    font=ctk.CTkFont(size=13, weight="bold"),
-                    anchor="w",
-                ).pack(fill="x", padx=10, pady=(8, 4))
+                inner_frame = ctk.CTkFrame(card, fg_color="transparent")
+                inner_frame.pack(fill="x", padx=10, pady=8)
 
-                card_search_parts = [title_prefix.lower(), element_id.lower()]
+                ctk.CTkLabel(
+                    inner_frame,
+                    text=f"🔌 Linha {element_id}",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    anchor="w",
+                ).pack(fill="x", pady=(0, 6))
+
+                card_search_parts = [title_prefix.lower(), element_id.lower(), f"linha {element_id.lower()}"]
 
                 for param_name, meta in editable_params:
-                    param_row = ctk.CTkFrame(card, fg_color="transparent")
-                    param_row.pack(fill="x", padx=10, pady=(2, 8))
+                    param_row = ctk.CTkFrame(inner_frame, fg_color="transparent")
+                    param_row.pack(fill="x", pady=(2, 8))
 
                     ctk.CTkLabel(
                         param_row,
@@ -1273,9 +1298,13 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                     entry = ctk.CTkEntry(control_frame, width=130, textvariable=value_var)
                     entry.pack(side="left", padx=(0, 6))
+                    entry.configure(validate="key", validatecommand=vcmd_numeric)
 
                     plus_btn = ctk.CTkButton(control_frame, text="+", width=34, height=30)
-                    plus_btn.pack(side="left", padx=(0, 8))
+                    plus_btn.pack(side="left", padx=(0, 6))
+
+                    reset_btn = ctk.CTkButton(control_frame, text="↺", width=34, height=30)
+                    reset_btn.pack(side="left", padx=(0, 8))
 
                     status_label = ctk.CTkLabel(
                         control_frame,
@@ -1296,7 +1325,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                     row_data = {
                         "line_index": line_index,
-                        "name": f"{title_prefix} {element_id}",
+                        "name": f"Linha {element_id}",
                         "parameter": param_name,
                         "editable": True,
                         "original_value": original_value,
@@ -1322,6 +1351,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                     plus_btn.bind("<ButtonPress-1>", lambda _e, r=row_data: self._start_adjust_repeat(r, +1))
                     plus_btn.bind("<ButtonRelease-1>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
                     plus_btn.bind("<Leave>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+
+                    reset_btn.configure(command=lambda r=row_data: self._reset_single_atp_parameter(r))
 
                     value_var.trace_add("write", lambda *_args, r=row_data: self._on_atp_entry_changed(r))
 

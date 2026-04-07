@@ -1,12 +1,48 @@
 from __future__ import annotations
 
+import copy
+import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
 
 class ATPParseError(RuntimeError):
     """Erro de parsing de arquivo ATP."""
+
+
+_PARSE_CACHE_LOCK = threading.Lock()
+_PARSE_CACHE_MAX_ITEMS = 8
+_PARSE_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _cache_path_key(path: Path) -> str:
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = path
+
+    key = str(resolved)
+    if os.name == "nt":
+        key = key.lower()
+    return key
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    st = path.stat()
+    return int(st.st_mtime_ns), int(st.st_size)
+
+
+def invalidate_atp_parse_cache(path: str | Path | None = None) -> None:
+    """Limpa cache do parser ATP (global ou por caminho específico)."""
+    with _PARSE_CACHE_LOCK:
+        if path is None:
+            _PARSE_CACHE.clear()
+            return
+
+        key = _cache_path_key(Path(path))
+        _PARSE_CACHE.pop(key, None)
 
 
 def _parse_float(value: str) -> float:
@@ -204,6 +240,40 @@ def parse_atp_file(path: str | Path) -> list[dict[str, Any]]:
         except Exception:
             # Linha malformada é ignorada para manter robustez do parser.
             continue
+
+    return elements
+
+
+def parse_atp_file_cached(path: str | Path, force_refresh: bool = False) -> list[dict[str, Any]]:
+    """Retorna parse ATP com cache por assinatura de arquivo (mtime_ns + tamanho)."""
+    atp_path = Path(path)
+    if not atp_path.exists():
+        raise FileNotFoundError(f"Arquivo ATP nao encontrado: {atp_path}")
+
+    signature = _file_signature(atp_path)
+    cache_key = _cache_path_key(atp_path)
+
+    with _PARSE_CACHE_LOCK:
+        entry = _PARSE_CACHE.get(cache_key)
+        if (
+            not force_refresh
+            and entry is not None
+            and entry.get("signature") == signature
+            and isinstance(entry.get("elements"), list)
+        ):
+            return copy.deepcopy(entry["elements"])
+
+    elements = parse_atp_file(atp_path)
+
+    with _PARSE_CACHE_LOCK:
+        _PARSE_CACHE[cache_key] = {
+            "signature": signature,
+            "elements": copy.deepcopy(elements),
+        }
+
+        while len(_PARSE_CACHE) > _PARSE_CACHE_MAX_ITEMS:
+            first_key = next(iter(_PARSE_CACHE))
+            _PARSE_CACHE.pop(first_key, None)
 
     return elements
 

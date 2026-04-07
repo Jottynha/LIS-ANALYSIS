@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 
 from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
-from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
+from atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from atp_writer import write_atp_file
 from control_detector import (
     ControlDetector,
@@ -213,6 +213,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_param_status_var = tk.StringVar(value="Nenhum parametro carregado")
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
+        self._atp_source_signature = None
+        self._atp_lines_cache_signature = None
+        self._atp_lines_cache = []
         self._atp_param_rows = []
         self.atp_param_filter_var = tk.StringVar(value="")
         self.parameter_overrides = {}
@@ -784,6 +787,22 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._load_atp_parameters(show_dialog_errors=False)
             self._save_prefs()
 
+    def _get_atp_file_signature(self, atp_path: Path) -> tuple[str, int, int]:
+        """Assinatura do arquivo ATP para invalidar cache quando houver alteração."""
+        resolved = str(atp_path.resolve())
+        st = atp_path.stat()
+        return (resolved, int(st.st_mtime_ns), int(st.st_size))
+
+    def _get_cached_atp_original_lines(self, atp_path: Path, signature: tuple[str, int, int]) -> list[str]:
+        """Retorna linhas originais do ATP com cache simples por assinatura."""
+        if self._atp_lines_cache_signature == signature and self._atp_lines_cache:
+            return list(self._atp_lines_cache)
+
+        lines = _read_text_lines_preserve_newlines(atp_path)
+        self._atp_lines_cache_signature = signature
+        self._atp_lines_cache = list(lines)
+        return lines
+
     def _clear_atp_parameter_editor(self):
         """Limpa a lista visual e caches de parametros ATP detectados."""
         for row in self._atp_param_rows:
@@ -797,6 +816,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
+        self._atp_source_signature = None
         self._atp_param_rows = []
         self.parameter_overrides = {}
         self._atp_section_widgets = {}
@@ -1226,15 +1246,18 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _load_atp_parameters(self, show_dialog_errors: bool = True):
         """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
         atp_file = self.atp_file_var.get().strip()
-        if not atp_file or not Path(atp_file).exists():
+        atp_path = Path(atp_file)
+        if not atp_file or not atp_path.exists():
             self._clear_atp_parameter_editor()
             if show_dialog_errors:
                 self._show_error("Erro", "Arquivo .atp nao encontrado para detectar parametros.")
             return
 
         try:
-            elements = parse_atp_file(atp_file)
+            signature = self._get_atp_file_signature(atp_path)
+            elements = parse_atp_file_cached(atp_path)
             editable = get_editable_parameters(elements)
+            original_lines = self._get_cached_atp_original_lines(atp_path, signature)
         except Exception as e:
             self._clear_atp_parameter_editor()
             if show_dialog_errors:
@@ -1242,8 +1265,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         self._clear_atp_parameter_editor()
+        self._atp_source_signature = signature
         self._atp_elements_cache = elements
-        self._atp_original_lines_cache = _read_text_lines_preserve_newlines(Path(atp_file))
+        self._atp_original_lines_cache = original_lines
 
         if not editable:
             self.atp_param_status_var.set("Nenhum componente editavel detectado")
@@ -1951,7 +1975,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 execution_atp_path = Path(atp_file)
                 if atp_overrides:
                     report_progress("Applying ATP parameter overrides...")
-                    elements = parse_atp_file(execution_atp_path)
+                    elements = parse_atp_file_cached(execution_atp_path)
                     original_lines = _read_text_lines_preserve_newlines(execution_atp_path)
                     for override in atp_overrides:
                         update_parameter(

@@ -10,44 +10,114 @@ import math
 from datetime import datetime
 from pathlib import Path
 
-# IMPORTANTE: Configurar matplotlib ANTES de importar customtkinter
-import matplotlib
-matplotlib.use('TkAgg')  # Backend com GUI para evitar conflito com customtkinter
-import matplotlib.pyplot as plt
-import numpy as np
-
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
-# Importa funções do pipeline
-try:
-    from main import (
-        parse_lis_table,
-        save_df_to_excel_only,
-        calcular_estatisticas_do_df,
-        escrever_estatisticas_excel,
-        criar_grafico_comparativo,
-        parse_lis_time_series,
-        save_time_series_to_excel,
-        criar_grafico_series_temporais,
-    )
-    from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
-    from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
-    from atp_writer import write_atp_file
-    from control_detector import (
-        ControlDetector,
-        FileControlInfo,
-        analyze_workspace_files
-    )
-except Exception:
-    raise
+from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
+from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
+from atp_writer import write_atp_file
+from control_detector import (
+    ControlDetector,
+    FileControlInfo,
+    analyze_workspace_files
+)
 
 # Configurações globais do CustomTkinter
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
 PREFS_FILE = Path.home() / ".lis_analysis_gui.json"
+
+parse_lis_table = None
+parse_lis_once = None
+save_df_to_excel_only = None
+calcular_estatisticas_do_df = None
+escrever_estatisticas_excel = None
+criar_grafico_comparativo = None
+parse_lis_time_series = None
+save_time_series_to_excel = None
+criar_grafico_series_temporais = None
+obter_xy_e_stats_de_excel = None
+
+_pipeline_imported = False
+_pipeline_import_lock = threading.Lock()
+
+plt = None
+np = None
+_plot_import_lock = threading.Lock()
+
+
+def _ensure_pipeline_imports():
+    global _pipeline_imported
+    global parse_lis_table
+    global parse_lis_once
+    global save_df_to_excel_only
+    global calcular_estatisticas_do_df
+    global escrever_estatisticas_excel
+    global criar_grafico_comparativo
+    global parse_lis_time_series
+    global save_time_series_to_excel
+    global criar_grafico_series_temporais
+    global obter_xy_e_stats_de_excel
+
+    if _pipeline_imported:
+        return
+
+    with _pipeline_import_lock:
+        if _pipeline_imported:
+            return
+
+        from main import (
+            parse_lis_table as _parse_lis_table,
+            parse_lis_once as _parse_lis_once,
+            save_df_to_excel_only as _save_df_to_excel_only,
+            calcular_estatisticas_do_df as _calcular_estatisticas_do_df,
+            escrever_estatisticas_excel as _escrever_estatisticas_excel,
+            criar_grafico_comparativo as _criar_grafico_comparativo,
+            parse_lis_time_series as _parse_lis_time_series,
+            save_time_series_to_excel as _save_time_series_to_excel,
+            criar_grafico_series_temporais as _criar_grafico_series_temporais,
+            obter_xy_e_stats_de_excel as _obter_xy_e_stats_de_excel,
+        )
+
+        parse_lis_table = _parse_lis_table
+        parse_lis_once = _parse_lis_once
+        save_df_to_excel_only = _save_df_to_excel_only
+        calcular_estatisticas_do_df = _calcular_estatisticas_do_df
+        escrever_estatisticas_excel = _escrever_estatisticas_excel
+        criar_grafico_comparativo = _criar_grafico_comparativo
+        parse_lis_time_series = _parse_lis_time_series
+        save_time_series_to_excel = _save_time_series_to_excel
+        criar_grafico_series_temporais = _criar_grafico_series_temporais
+        obter_xy_e_stats_de_excel = _obter_xy_e_stats_de_excel
+
+        _pipeline_imported = True
+
+
+def _ensure_plot_imports():
+    global plt
+    global np
+
+    if plt is not None and np is not None:
+        return
+
+    with _plot_import_lock:
+        if np is None:
+            import numpy as _np
+            np = _np
+
+        if plt is None:
+            import matplotlib
+
+            if 'matplotlib.pyplot' not in sys.modules:
+                try:
+                    matplotlib.use('TkAgg')
+                except Exception:
+                    pass
+
+            import matplotlib.pyplot as _plt
+            plt = _plt
 
 
 def _scan_lis(folder: Path):
@@ -119,6 +189,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._files_cache = []
         self._sort_desc = False
         self._sort_col = 'nome'
+        self._log_max_lines = 3000
+        self._log_trim_every = 20
+        self._log_entries_since_trim = 0
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -1582,6 +1655,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.configure(state="normal")
         self.log_textbox.delete("1.0", "end")
         self.log_textbox.configure(state="disabled")
+        self._log_entries_since_trim = 0
         self.log("Logs limpos")
 
     def _save_logs_to_file(self):
@@ -1605,8 +1679,25 @@ class ModernLisAnalysisApp(ctk.CTk):
         full_msg = f"[{timestamp}] {message}\n"
         self.log_textbox.configure(state="normal")
         self.log_textbox.insert("end", full_msg)
+
+        self._log_entries_since_trim += 1
+        if self._log_entries_since_trim >= self._log_trim_every:
+            self._trim_log_if_needed()
+            self._log_entries_since_trim = 0
+
         self.log_textbox.see("end")
         self.log_textbox.configure(state="disabled")
+
+    def _trim_log_if_needed(self):
+        """Mantem apenas as ultimas linhas do log para evitar crescimento indefinido."""
+        try:
+            line_idx = self.log_textbox.index("end-1c")
+            line_count = int(line_idx.split(".")[0])
+            overflow = line_count - self._log_max_lines
+            if overflow > 0:
+                self.log_textbox.delete("1.0", f"{overflow + 1}.0")
+        except Exception:
+            pass
 
     def _show_styled_dialog(self, title: str, message: str, level: str = "info", details: list | None = None):
         """Exibe dialogo modal customizado com layout mais organizado que messagebox."""
@@ -1854,6 +1945,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             parametrized_exec_atp = None
             try:
+                _ensure_pipeline_imports()
                 import shutil
 
                 execution_atp_path = Path(atp_file)
@@ -1930,7 +2022,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
                 report_progress("Parsing LIS and generating tables...")
-                df, stats_lines, summary = parse_lis_table(lis_target)
+                parsed = parse_lis_once(lis_target, verbose=False)
+                df, stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
                 excel_path = None
                 table_warning = None
                 if df is None:
@@ -1962,7 +2055,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                 report_progress("Processing time series...")
                 try:
-                    time_series_df = parse_lis_time_series(lis_target)
+                    time_series_df = parsed.time_series_df
                     if time_series_df is not None:
                         if excel_path is None:
                             excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
@@ -2278,6 +2371,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         def worker():
             try:
+                _ensure_pipeline_imports()
                 base_outdir = Path(self.outdir_var.get())
                 base_outdir.mkdir(parents=True, exist_ok=True)
                 
@@ -2316,7 +2410,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.log(f"Processando: {lis_path.name}")
                     
                     # Parse do .lis
-                    df, stats_lines, summary = parse_lis_table(lis_path)
+                    parsed = parse_lis_once(lis_path, verbose=False)
+                    df, stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
                     if df is None:
                         self.log(f"Tabela não encontrada em: {lis_path.name}")
                         continue
@@ -2353,7 +2448,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     
                     # Séries temporais
                     try:
-                        time_series_df = parse_lis_time_series(lis_path)
+                        time_series_df = parsed.time_series_df
                         if time_series_df is not None:
                             save_time_series_to_excel(time_series_df, excel_path)
                             series_name = f"series_temporais_{base_name}.png"
@@ -2419,8 +2514,8 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico individual com opções customizadas de visualização"""
         try:
-            # Importar aqui para evitar circular import
-            from main import obter_xy_e_stats_de_excel
+            _ensure_pipeline_imports()
+            _ensure_plot_imports()
             
             res = obter_xy_e_stats_de_excel(excel_path)
             if res is None:
@@ -2480,7 +2575,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             # Caixa de estatísticas
             if plot_options.get('show_stats_box', True):
                 try:
-                    from main import calcular_estatisticas_do_df
                     import pandas as pd
                     df_excel = pd.read_excel(excel_path, sheet_name='Dados')
                     computed_stats = calcular_estatisticas_do_df(df_excel)
@@ -2550,7 +2644,8 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _criar_grafico_comparativo_customizado(self, excel_paths: list, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico comparativo com opções customizadas"""
         try:
-            from main import obter_xy_e_stats_de_excel
+            _ensure_pipeline_imports()
+            _ensure_plot_imports()
             
             series_data = []
             labels = []

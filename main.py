@@ -8,6 +8,7 @@ Dependências:
 
 # Bibliotecas necessárias:
 import re
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import os
@@ -108,74 +109,64 @@ def _count_target_hints(header_text: str) -> int:
     lower_header = header_text.lower()
     return sum(1 for hint in TARGET_DISTRIBUTION_HINTS if hint in lower_header)
 
-# ---------- Detecção de variáveis de saída do .lis ----------
-def parse_lis_output_variables(lis_path: Path) -> List[str]:
-    """
-    Lê o cabeçalho do .lis e extrai os nomes das variáveis de saída.
-    Procura pela linha com "Step" e "Time" e extrai nomes das variáveis.
-    
-    Retorna lista de nomes de variáveis (ex: ['X0003A', 'X0003B', 'X0003C', ...])
-    """
-    variables = []
-    
+
+@dataclass
+class LisParseResult:
+    table_df: Optional[pd.DataFrame]
+    stats_lines: List[str]
+    summary: Dict[str, Tuple[Optional[float], Optional[float]]]
+    time_series_df: Optional[pd.DataFrame]
+    output_variables: List[str]
+
+
+def _read_lis_lines(lis_path: Path) -> List[str]:
     with lis_path.open('r', errors='replace') as f:
-        for line in f:
-            # Procurar pela linha que contém "Step" e "Time" (cabeçalho da tabela de dados)
-            if 'Step' in line and 'Time' in line:
-                # Esta é a linha com os nomes das variáveis
-                parts = line.split()
-                
-                # Remover "Step" e "Time" (primeiras duas colunas)
-                for part in parts:
-                    clean_part = part.strip()
-                    # Ignorar Step, Time e strings vazias
-                    if clean_part and clean_part not in ['Step', 'Time']:
-                        # Verificar se não é um número
-                        try:
-                            float(clean_part)
-                            continue
-                        except ValueError:
-                            # É uma variável válida
-                            variables.append(clean_part)
-                
-                break  # Encontrou a linha, não precisa continuar
-    
+        return [raw_line.rstrip('\n') for raw_line in f]
+
+
+def _parse_lis_output_variables_from_lines(lines: List[str]) -> List[str]:
+    variables = []
+
+    for line in lines:
+        if 'Step' in line and 'Time' in line:
+            parts = line.split()
+            for part in parts:
+                clean_part = part.strip()
+                if clean_part and clean_part not in ['Step', 'Time']:
+                    try:
+                        float(clean_part)
+                        continue
+                    except ValueError:
+                        variables.append(clean_part)
+            break
+
     return variables
 
-# ---------- Parsing de tabela de séries temporais (Step/Time + Variáveis) ----------
-def parse_lis_time_series(lis_path: Path, selected_variables: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
-    """
-    Lê a tabela de séries temporais do .lis (Step, Time, STDA, STDB, etc.)
-    e retorna DataFrame com apenas as variáveis selecionadas.
-    
-    Args:
-        lis_path: Caminho para o arquivo .lis
-        selected_variables: Lista de variáveis para incluir. Se None, inclui todas.
-    
-    Returns:
-        DataFrame com colunas: Step, Time, [variáveis selecionadas]
-        Ou None se não encontrar dados
-    """
-    # Primeiro detectar as variáveis disponíveis
-    all_variables = parse_lis_output_variables(lis_path)
-    
+
+def _parse_lis_time_series_from_lines(
+    lines: List[str],
+    all_variables: List[str],
+    selected_variables: Optional[List[str]],
+    lis_name: str,
+    verbose: bool = True,
+) -> Optional[pd.DataFrame]:
     if not all_variables:
-        print(f"⚠️ Nenhuma variável detectada em {lis_path.name}")
+        if verbose:
+            print(f"⚠️ Nenhuma variável detectada em {lis_name}")
         return None
-    
-    # Se não especificou variáveis, usar todas
+
     if selected_variables is None:
         selected_variables = all_variables
-    
-    # Validar variáveis selecionadas
+
     valid_vars = [v for v in selected_variables if v in all_variables]
     if not valid_vars:
-        print(f"⚠️ Nenhuma variável selecionada válida. Disponíveis: {all_variables}")
+        if verbose:
+            print(f"⚠️ Nenhuma variável selecionada válida. Disponíveis: {all_variables}")
         return None
-    
-    print(f"📊 Lendo variáveis: {', '.join(valid_vars)}")
-    
-    # Mapear índices das variáveis selecionadas (após Step e Time)
+
+    if verbose:
+        print(f"📊 Lendo variáveis: {', '.join(valid_vars)}")
+
     var_indices = []
     for var in valid_vars:
         try:
@@ -183,66 +174,50 @@ def parse_lis_time_series(lis_path: Path, selected_variables: Optional[List[str]
             var_indices.append(idx)
         except ValueError:
             continue
-    
-    # Ler dados da tabela
+
     data_rows = []
     in_data = False
-    
-    with lis_path.open('r', errors='replace') as f:
-        for line in f:
-            # Procurar início da tabela de dados (após "Step      Time")
-            if 'Step' in line and 'Time' in line and not in_data:
-                # Pular linhas de cabeçalho até chegar aos dados numéricos
-                in_data = True
-                continue
-            
-            if in_data:
-                # Parar se encontrar linha vazia ou fim de arquivo
-                if line.strip() == '' or 'BLANK' in line.upper():
-                    break
-                
-                # Tentar extrair números da linha
-                parts = line.split()
-                if len(parts) >= 2 + len(all_variables):
-                    try:
-                        # Step e Time são as duas primeiras colunas
-                        step = int(parts[0])
-                        time = float(parts[1])
-                        
-                        # Extrair valores das variáveis selecionadas
-                        row = [step, time]
-                        for idx in var_indices:
-                            val = float(parts[2 + idx])  # +2 pois Step e Time vêm antes
-                            row.append(val)
-                        
-                        data_rows.append(row)
-                    except (ValueError, IndexError):
-                        continue
-    
+    for line in lines:
+        if 'Step' in line and 'Time' in line and not in_data:
+            in_data = True
+            continue
+
+        if in_data:
+            if line.strip() == '' or 'BLANK' in line.upper():
+                break
+
+            parts = line.split()
+            if len(parts) >= 2 + len(all_variables):
+                try:
+                    step = int(parts[0])
+                    time = float(parts[1])
+
+                    row = [step, time]
+                    for idx in var_indices:
+                        val = float(parts[2 + idx])
+                        row.append(val)
+
+                    data_rows.append(row)
+                except (ValueError, IndexError):
+                    continue
+
     if not data_rows:
-        print(f"⚠️ Nenhum dado encontrado em {lis_path.name}")
+        if verbose:
+            print(f"⚠️ Nenhum dado encontrado em {lis_name}")
         return None
-    
-    # Criar DataFrame
+
     columns = ['Step', 'Time'] + valid_vars
     df = pd.DataFrame(data_rows, columns=columns)
-    
-    print(f"✅ Lidos {len(df)} pontos de dados com {len(valid_vars)} variável(is)")
-    
+
+    if verbose:
+        print(f"✅ Lidos {len(df)} pontos de dados com {len(valid_vars)} variável(is)")
+
     return df
 
-# ---------- Parsing do .lis + extração de sumário ----------
-def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], Dict[str, Tuple[Optional[float], Optional[float]]]]:
-    """
-    Lê o .lis, extrai a tabela de bins (colunas 6 números por linha),
-    retorna (df, stats_lines_brutas, summary_dict)
 
-    summary_dict (se encontrado) terá chaves: 'mean', 'variance', 'std_dev'
-    e valores como tupla (grouped_value_or_None, ungrouped_value_or_None).
-    """
-    with lis_path.open('r', errors='replace') as f:
-        lines = [raw_line.rstrip('\n') for raw_line in f]
-
+def _parse_lis_table_from_lines(
+    lines: List[str],
+) -> Tuple[Optional[pd.DataFrame], List[str], Dict[str, Tuple[Optional[float], Optional[float]]]]:
     candidates: List[Tuple[int, int, List[List[float]], List[str], str]] = []
     idx = 0
     total_lines = len(lines)
@@ -306,7 +281,6 @@ def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], 
         'Frequency', 'Cumulative', 'Percent'
     ])
 
-    # tentar converter colunas inteiras quando apropriado
     for col in ['Interval', 'Frequency', 'Cumulative']:
         try:
             if df[col].dropna().apply(float.is_integer).all() and not df[col].isna().any():
@@ -315,6 +289,73 @@ def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], 
             pass
 
     return df, stats_lines, summary
+
+
+def parse_lis_once(
+    lis_path: Path,
+    selected_variables: Optional[List[str]] = None,
+    verbose: bool = True,
+) -> LisParseResult:
+    """Executa parsing do .lis em passagem única para tabela + séries temporais."""
+    lines = _read_lis_lines(lis_path)
+
+    table_df, stats_lines, summary = _parse_lis_table_from_lines(lines)
+    output_variables = _parse_lis_output_variables_from_lines(lines)
+    time_series_df = _parse_lis_time_series_from_lines(
+        lines,
+        output_variables,
+        selected_variables,
+        lis_name=lis_path.name,
+        verbose=verbose,
+    )
+
+    return LisParseResult(
+        table_df=table_df,
+        stats_lines=stats_lines,
+        summary=summary,
+        time_series_df=time_series_df,
+        output_variables=output_variables,
+    )
+
+# ---------- Detecção de variáveis de saída do .lis ----------
+def parse_lis_output_variables(lis_path: Path) -> List[str]:
+    """
+    Lê o cabeçalho do .lis e extrai os nomes das variáveis de saída.
+    Procura pela linha com "Step" e "Time" e extrai nomes das variáveis.
+    
+    Retorna lista de nomes de variáveis (ex: ['X0003A', 'X0003B', 'X0003C', ...])
+    """
+    lines = _read_lis_lines(lis_path)
+    return _parse_lis_output_variables_from_lines(lines)
+
+# ---------- Parsing de tabela de séries temporais (Step/Time + Variáveis) ----------
+def parse_lis_time_series(lis_path: Path, selected_variables: Optional[List[str]] = None) -> Optional[pd.DataFrame]:
+    """
+    Lê a tabela de séries temporais do .lis (Step, Time, STDA, STDB, etc.)
+    e retorna DataFrame com apenas as variáveis selecionadas.
+    
+    Args:
+        lis_path: Caminho para o arquivo .lis
+        selected_variables: Lista de variáveis para incluir. Se None, inclui todas.
+    
+    Returns:
+        DataFrame com colunas: Step, Time, [variáveis selecionadas]
+        Ou None se não encontrar dados
+    """
+    parsed = parse_lis_once(lis_path, selected_variables=selected_variables, verbose=True)
+    return parsed.time_series_df
+
+# ---------- Parsing do .lis + extração de sumário ----------
+def parse_lis_table(lis_path: Path) -> Tuple[Optional[pd.DataFrame], List[str], Dict[str, Tuple[Optional[float], Optional[float]]]]:
+    """
+    Lê o .lis, extrai a tabela de bins (colunas 6 números por linha),
+    retorna (df, stats_lines_brutas, summary_dict)
+
+    summary_dict (se encontrado) terá chaves: 'mean', 'variance', 'std_dev'
+    e valores como tupla (grouped_value_or_None, ungrouped_value_or_None).
+    """
+    lines = _read_lis_lines(lis_path)
+    return _parse_lis_table_from_lines(lines)
 
 # ------------------ Salvar dados em Excel (aba 'Dados' e 'Estatisticas') ------------------
 
@@ -1258,8 +1299,9 @@ def main():
     excel_paths: List[Path] = []
     for idx, lis_path in enumerate(selected_files, start=args.sim_index):
         print("Usando .lis:", lis_path)
-        # parse do .lis
-        df, stats_lines, summary_from_lis = parse_lis_table(lis_path)
+        # Parse em passagem única: tabela + séries temporais.
+        parsed = parse_lis_once(lis_path, verbose=True)
+        df, stats_lines, summary_from_lis = parsed.table_df, parsed.stats_lines, parsed.summary
         if df is None:
             print("Tabela não encontrada no .lis (nenhuma linha com 6 números detectada):", lis_path)
             continue
@@ -1295,7 +1337,7 @@ def main():
         excel_paths.append(excel_path)
 
         # Salvar séries temporais
-        time_series_df = parse_lis_time_series(lis_path)
+        time_series_df = parsed.time_series_df
         if time_series_df is not None:
             save_time_series_to_excel(time_series_df, excel_path)
             criar_grafico_series_temporais(time_series_df, outdir / f"series_temporais_{idx}.png", lis_name=lis_path.name)

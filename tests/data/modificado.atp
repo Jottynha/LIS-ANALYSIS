@@ -1,0 +1,7 @@
+BEGIN NEW DATA CASE
+/BRANCH
+  X0001AX0003A                7.   75.                                         0
+  X0001BX0003B                5.   75.                                         0
+BLANK BRANCH
+BEGIN NEW DATA CASE
+BLANK

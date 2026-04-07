@@ -167,7 +167,8 @@ def run_atp_solver(
     working_directory = atp_path.parent
     atp_name = atp_path.name
     base_name = atp_path.stem
-    start_time = time.time()
+    start_wall_time = time.time()
+    start_monotonic = time.monotonic()
 
     lis_snapshot: dict[str, tuple[int, int]] = {}
     for existing in list(working_directory.glob("*.lis")) + list(working_directory.glob("*.LIS")):
@@ -179,7 +180,7 @@ def run_atp_solver(
 
     lis_lower = working_directory / f"{base_name}.lis"
     lis_upper = working_directory / f"{base_name}.LIS"
-    start_floor = start_time - 1.0
+    start_floor = start_wall_time - 1.0
 
     def _is_recent_lis(path: Path) -> bool:
         try:
@@ -193,8 +194,9 @@ def run_atp_solver(
         key = str(path.resolve()).lower()
         previous = lis_snapshot.get(key)
         if previous is None:
-            # Arquivo novo após início da execução.
-            return st.st_mtime >= start_floor
+            # Arquivo não existia no snapshot pré-run: é novo desta execução,
+            # mesmo que metadados de mtime venham com valor antigo.
+            return True
 
         prev_mtime_ns, prev_size = previous
         if int(st.st_mtime_ns) > prev_mtime_ns:
@@ -248,17 +250,17 @@ def run_atp_solver(
     auto_enter_thread.start()
 
     completion_event = threading.Event()
-    last_output_time = time.time()
+    last_output_monotonic = time.monotonic()
 
     def _drain_output() -> None:
-        nonlocal last_output_time
+        nonlocal last_output_monotonic
         if process.stdout is None:
             return
         try:
             for line in process.stdout:
                 clean = line.strip()
                 if clean:
-                    last_output_time = time.time()
+                    last_output_monotonic = time.monotonic()
                     _notify(f"[runATP] {clean}")
                     lower = clean.lower()
                     if "total execution time was" in lower or "atp finished at" in lower:
@@ -274,13 +276,13 @@ def run_atp_solver(
     return_code = None
     lis_path = None
     last_size = None
-    last_change_time = None
+    last_change_monotonic = None
     stable_window_sec = 3.0
     process_done = False
-    process_done_at = None
+    process_done_at_monotonic = None
 
     def _update_lis_state() -> bool:
-        nonlocal lis_path, last_size, last_change_time
+        nonlocal lis_path, last_size, last_change_monotonic
 
         candidate = None
         try:
@@ -304,15 +306,18 @@ def run_atp_solver(
 
         if last_size != current_size:
             last_size = current_size
-            last_change_time = time.time()
+            last_change_monotonic = time.monotonic()
             return False
 
-        return last_change_time is not None and (time.time() - last_change_time) >= stable_window_sec
+        return (
+            last_change_monotonic is not None
+            and (time.monotonic() - last_change_monotonic) >= stable_window_sec
+        )
 
     try:
         while True:
-            now = time.time()
-            elapsed_total = now - start_time
+            now_monotonic = time.monotonic()
+            elapsed_total = now_monotonic - start_monotonic
             lis_stable = _update_lis_state()
 
             if not process_done:
@@ -320,7 +325,7 @@ def run_atp_solver(
                 if polled is not None:
                     return_code = polled
                     process_done = True
-                    process_done_at = now
+                    process_done_at_monotonic = now_monotonic
                     _notify(f"Process finished with return code {return_code}")
                     _notify("Waiting for LIS generation/stabilization...")
 
@@ -336,7 +341,7 @@ def run_atp_solver(
                     return_code = process.wait()
 
                 process_done = True
-                process_done_at = now
+                process_done_at_monotonic = now_monotonic
                 _notify(f"Process finished with return code {return_code}")
                 _notify("Waiting for LIS generation/stabilization...")
 
@@ -345,7 +350,7 @@ def run_atp_solver(
             if (
                 not process_done
                 and lis_stable
-                and (now - last_output_time) > 8.0
+                and (now_monotonic - last_output_monotonic) > 8.0
                 and elapsed_total > 12.0
             ):
                 _notify("Stable LIS detected with idle wrapper output. Forcing wrapper shutdown...")
@@ -357,7 +362,7 @@ def run_atp_solver(
                     return_code = process.wait()
 
                 process_done = True
-                process_done_at = now
+                process_done_at_monotonic = now_monotonic
                 _notify(f"Process finished with return code {return_code}")
                 _notify("Waiting for LIS generation/stabilization...")
 
@@ -371,7 +376,11 @@ def run_atp_solver(
                 raise TimeoutError(f"Timeout aguardando termino do processo ATP ({timeout}s)")
 
             # Tolerancia curta para flush apos processo terminar.
-            if process_done and process_done_at is not None and (now - process_done_at) > 30.0:
+            if (
+                process_done
+                and process_done_at_monotonic is not None
+                and (now_monotonic - process_done_at_monotonic) > 30.0
+            ):
                 break
 
             time.sleep(0.2)
@@ -385,7 +394,7 @@ def run_atp_solver(
         auto_enter_thread.join(timeout=1.0)
         output_thread.join(timeout=1.0)
 
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_monotonic
 
     _notify("Simulacao concluida")
     _notify(f"Tempo total: {elapsed:.2f} s")

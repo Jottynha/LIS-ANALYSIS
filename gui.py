@@ -141,9 +141,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
         self._atp_param_rows = []
+        self.atp_param_filter_var = tk.StringVar(value="")
         self.parameter_overrides = {}
         self._atp_section_collapsed = {"branch": False, "switch": False, "source": False}
         self._atp_section_widgets = {}
+        self._atp_section_order = ["branch", "switch", "source"]
+        self._atp_filter_no_results_label = None
         self.atp_params_scroll_frame = None
         
         
@@ -553,23 +556,30 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=12)
         ).pack(side="left", padx=10)
 
-        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=180)
+        filter_row = ctk.CTkFrame(params_card, fg_color="transparent")
+        filter_row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(filter_row, text="Buscar nó/parâmetro:").pack(side="left", padx=(0, 8))
+
+        filter_entry = ctk.CTkEntry(
+            filter_row,
+            width=320,
+            textvariable=self.atp_param_filter_var,
+            placeholder_text="Ex.: X0001A, resistência, branch...",
+        )
+        filter_entry.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            filter_row,
+            text="Limpar",
+            width=90,
+            command=lambda: self.atp_param_filter_var.set(""),
+        ).pack(side="left", padx=(8, 0))
+
+        self.atp_param_filter_var.trace_add("write", lambda *_args: self._apply_atp_parameter_filter())
+
+        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=260)
         self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
-
-        info_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        info_card.pack(fill="x", pady=(0, 15))
-
-        ctk.CTkLabel(
-            info_card,
-            text="Status da Integracao ATP",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-
-        ctk.CTkLabel(
-            info_card,
-            text="A simulacao usa runATP.exe no mesmo diretorio do arquivo .atp e aguarda o termino da execucao.",
-            justify="left"
-        ).pack(anchor="w", padx=15, pady=(0, 15))
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
@@ -703,11 +713,21 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _clear_atp_parameter_editor(self):
         """Limpa a lista visual e caches de parametros ATP detectados."""
+        for row in self._atp_param_rows:
+            job = row.get("_repeat_job")
+            if job is None:
+                continue
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
         self._atp_param_rows = []
         self.parameter_overrides = {}
         self._atp_section_widgets = {}
+        self._atp_filter_no_results_label = None
         self.atp_param_status_var.set("Nenhum parametro carregado")
 
         if self.atp_params_scroll_frame is None:
@@ -715,6 +735,60 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         for widget in self.atp_params_scroll_frame.winfo_children():
             widget.destroy()
+
+    def _apply_atp_parameter_filter(self):
+        if self.atp_params_scroll_frame is None:
+            return
+
+        query = self.atp_param_filter_var.get().strip().lower()
+        total_visible_cards = 0
+
+        for section_key in self._atp_section_order:
+            section_data = self._atp_section_widgets.get(section_key)
+            if not section_data:
+                continue
+
+            visible_cards = 0
+            for card_data in section_data.get("cards", []):
+                widget = card_data["widget"]
+                should_show = (not query) or (query in card_data.get("search_text", ""))
+
+                if should_show:
+                    visible_cards += 1
+                    if not card_data.get("visible", True):
+                        widget.pack(fill="x", padx=10, pady=6)
+                        card_data["visible"] = True
+                else:
+                    if card_data.get("visible", True):
+                        widget.pack_forget()
+                        card_data["visible"] = False
+
+            section_frame = section_data.get("section")
+            if section_frame is None:
+                continue
+
+            if visible_cards > 0:
+                total_visible_cards += visible_cards
+                if not section_data.get("section_visible", True):
+                    section_frame.pack(fill="x", padx=4, pady=(6, 8))
+                    section_data["section_visible"] = True
+                self._apply_atp_section_visibility(section_key)
+            else:
+                if section_data.get("section_visible", True):
+                    section_frame.pack_forget()
+                    section_data["section_visible"] = False
+
+        if query and total_visible_cards == 0:
+            if self._atp_filter_no_results_label is None:
+                self._atp_filter_no_results_label = ctk.CTkLabel(
+                    self.atp_params_scroll_frame,
+                    text="Nenhum parâmetro corresponde ao filtro informado.",
+                    justify="left",
+                )
+            self._atp_filter_no_results_label.pack(anchor="w", padx=8, pady=8)
+        else:
+            if self._atp_filter_no_results_label is not None:
+                self._atp_filter_no_results_label.pack_forget()
 
     def _apply_atp_section_visibility(self, section_key: str):
         section_data = self._atp_section_widgets.get(section_key)
@@ -770,20 +844,27 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         return first_token if first_token else "Nao identificado"
 
-    def _get_slider_limits(self, param_name: str, original_value: float) -> tuple[float, float, int]:
+    def _is_non_negative_parameter(self, param_name: str) -> bool:
+        return param_name in {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
+
+    def _get_param_step(self, param_name: str, original_value: float) -> float:
+        if param_name in {"t_close", "delay"}:
+            return 0.0001
+        if param_name == "phase":
+            return 1.0
+
         abs_value = abs(float(original_value))
-        span = max(abs_value * 2.0, 1.0)
-        low = float(original_value) - span
-        high = float(original_value) + span
-
-        non_negative_params = {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
-        if param_name in non_negative_params:
-            low = max(0.0, low)
-
-        if math.isclose(low, high, rel_tol=0.0, abs_tol=1e-12):
-            high = low + 1.0
-
-        return low, high, 400
+        if abs_value >= 1000:
+            return 10.0
+        if abs_value >= 100:
+            return 1.0
+        if abs_value >= 10:
+            return 0.1
+        if abs_value >= 1:
+            return 0.01
+        if abs_value >= 0.1:
+            return 0.001
+        return 0.0001
 
     def _format_param_value(self, value: float, keep_trailing_dot: bool = False) -> str:
         if keep_trailing_dot and float(value).is_integer():
@@ -806,12 +887,34 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _set_atp_row_visual_state(self, row: dict, state: str):
         entry = row["entry"]
+        status_label = row.get("status_label")
         if state == "invalid":
-            entry.configure(fg_color="#FDECEC", border_color="#C62828")
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color="#DC2626",
+                border_width=2,
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Inválido", text_color=("#B91C1C", "#FCA5A5"))
         elif state == "changed":
-            entry.configure(fg_color="#FFF7CC", border_color="#D4A017")
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color="#D97706",
+                border_width=2,
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Alterado", text_color=("#B45309", "#FCD34D"))
         else:
-            entry.configure(fg_color=row["default_fg_color"], border_color=row["default_border_color"])
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color=row["default_border_color"],
+                border_width=row["default_border_width"],
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Original", text_color=("#4B5563", "#94A3B8"))
 
     def _update_atp_parameter_row(self, row: dict, source: str = "entry"):
         key = (int(row["line_index"]), str(row["parameter"]))
@@ -836,13 +939,6 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         row["invalid"] = False
 
-        if source == "entry":
-            if not row.get("_updating", False):
-                row["_updating"] = True
-                clamped = min(max(parsed_value, row["slider_min"]), row["slider_max"])
-                row["slider"].set(clamped)
-                row["_updating"] = False
-
         original_value = float(row["original_value"])
         if abs(parsed_value - original_value) > 1e-15:
             self.parameter_overrides[key] = float(parsed_value)
@@ -858,14 +954,53 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
         self._update_atp_parameter_row(row, source="entry")
 
-    def _on_atp_slider_changed(self, row: dict, value: float):
+    def _adjust_atp_parameter(self, row: dict, direction: int):
         if row.get("_updating", False):
             return
 
+        raw = row["var"].get().strip()
+        normalized = raw.replace("D", "E").replace("d", "e")
+        try:
+            current = float(normalized)
+        except ValueError:
+            current = float(row["original_value"])
+
+        new_value = current + (float(direction) * float(row["step"]))
+        if self._is_non_negative_parameter(str(row.get("parameter", ""))):
+            new_value = max(0.0, new_value)
+
         row["_updating"] = True
-        row["var"].set(self._format_param_value(float(value), keep_trailing_dot=row["keep_trailing_dot"]))
+        row["var"].set(self._format_param_value(float(new_value), keep_trailing_dot=row["keep_trailing_dot"]))
         row["_updating"] = False
-        self._update_atp_parameter_row(row, source="slider")
+        self._update_atp_parameter_row(row, source="buttons")
+
+    def _repeat_adjust_tick(self, row: dict):
+        direction = int(row.get("_repeat_direction", 0))
+        if direction == 0:
+            row["_repeat_job"] = None
+            return
+
+        self._adjust_atp_parameter(row, direction)
+        row["_repeat_job"] = self.after(90, lambda r=row: self._repeat_adjust_tick(r))
+
+    def _start_adjust_repeat(self, row: dict, direction: int):
+        self._stop_adjust_repeat(row)
+        row["_repeat_direction"] = int(direction)
+
+        # Primeiro passo imediato, depois repete enquanto pressionado.
+        self._adjust_atp_parameter(row, int(direction))
+        row["_repeat_job"] = self.after(350, lambda r=row: self._repeat_adjust_tick(r))
+
+    def _stop_adjust_repeat(self, row: dict):
+        row["_repeat_direction"] = 0
+        job = row.get("_repeat_job")
+        if job is None:
+            return
+        try:
+            self.after_cancel(job)
+        except Exception:
+            pass
+        row["_repeat_job"] = None
 
     def _apply_atp_parameter_changes(self):
         """Valida campos e confirma alterações no estado da interface."""
@@ -896,7 +1031,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             row["_updating"] = True
             original = float(row["original_value"])
             row["var"].set(self._format_param_value(original, keep_trailing_dot=row["keep_trailing_dot"]))
-            row["slider"].set(original)
             row["_updating"] = False
             row["invalid"] = False
             self._set_atp_row_visual_state(row, "normal")
@@ -904,6 +1038,96 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.parameter_overrides = {}
         self._refresh_atp_param_status()
         self.log("[ATP] Alteracoes de parametros resetadas para valores originais")
+
+    def _build_atp_overrides_preview_table(self, overrides: list[dict]) -> str:
+        header = f"{'Elemento':<30} {'Parametro':<22} {'Valor'}"
+        lines = [header, "-" * len(header)]
+
+        max_rows = 80
+        for item in overrides[:max_rows]:
+            name = str(item.get("name", ""))[:30]
+            parameter = self._friendly_atp_param_label(str(item.get("parameter", "")))[:22]
+            old_value = self._format_param_value(float(item.get("old_value", 0.0)))
+            new_value = self._format_param_value(float(item.get("new_value", 0.0)))
+            lines.append(f"{name:<30} {parameter:<22} {old_value} -> {new_value}")
+
+        if len(overrides) > max_rows:
+            lines.append(f"... +{len(overrides) - max_rows} alteracao(oes) adicionais")
+
+        return "\n".join(lines)
+
+    def _confirm_atp_overrides_preview(self, overrides: list[dict]) -> bool:
+        """Mostra preview de alterações e pede confirmação para executar a simulação."""
+        if not overrides:
+            return True
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Preview de alteracoes ATP")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        result = {"confirmed": False}
+
+        container = ctk.CTkFrame(dialog, corner_radius=12)
+        container.pack(fill="both", expand=True, padx=14, pady=14)
+
+        ctk.CTkLabel(
+            container,
+            text="Preview de alteracoes antes do Run Simulation",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(12, 6))
+
+        ctk.CTkLabel(
+            container,
+            text=f"{len(overrides)} parametro(s) alterado(s). Confirma execucao com estas alteracoes?",
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        preview_text = self._build_atp_overrides_preview_table(overrides)
+        preview_box = ctk.CTkTextbox(container, width=760, height=260, wrap="none")
+        preview_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        preview_box.insert("1.0", preview_text)
+        preview_box.configure(state="disabled")
+
+        buttons = ctk.CTkFrame(container, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _cancel(_event=None):
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        def _confirm(_event=None):
+            result["confirmed"] = True
+            _cancel()
+
+        ctk.CTkButton(buttons, text="Cancelar", width=130, fg_color="#757575", hover_color="#616161", command=_cancel).pack(side="right")
+        ctk.CTkButton(buttons, text="Continuar", width=130, fg_color="#2E7D32", hover_color="#1B5E20", command=_confirm).pack(side="right", padx=(0, 8))
+
+        dialog.bind("<Escape>", _cancel)
+        dialog.bind("<Return>", _confirm)
+
+        dialog.update_idletasks()
+        width = max(760, min(dialog.winfo_reqwidth(), 980))
+        height = max(430, min(dialog.winfo_reqheight(), 700))
+
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        pos_x = parent_x + (parent_w - width) // 2
+        pos_y = parent_y + (parent_h - height) // 2
+        dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        dialog.lift()
+        dialog.focus_force()
+        self.wait_window(dialog)
+
+        return bool(result["confirmed"])
 
     def _load_atp_parameters(self, show_dialog_errors: bool = True):
         """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
@@ -997,8 +1221,11 @@ class ModernLisAnalysisApp(ctk.CTk):
             section_body = ctk.CTkFrame(section, fg_color="transparent")
 
             self._atp_section_widgets[etype] = {
+                "section": section,
                 "body": section_body,
                 "toggle": toggle_btn,
+                "cards": [],
+                "section_visible": True,
             }
             self._apply_atp_section_visibility(etype)
 
@@ -1015,6 +1242,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                     font=ctk.CTkFont(size=13, weight="bold"),
                     anchor="w",
                 ).pack(fill="x", padx=10, pady=(8, 4))
+
+                card_search_parts = [title_prefix.lower(), element_id.lower()]
 
                 for param_name, meta in editable_params:
                     param_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -1037,16 +1266,33 @@ class ModernLisAnalysisApp(ctk.CTk):
                     raw_line = str(element.get("raw_line", ""))
                     field_text = raw_line[field_start:field_end] if 0 <= field_start < field_end <= len(raw_line) else ""
                     keep_trailing_dot = re.match(r"^[+-]?\d+\.$", field_text.strip()) is not None
-
-                    low, high, steps = self._get_slider_limits(param_name, original_value)
                     value_var = tk.StringVar(value=self._format_param_value(original_value, keep_trailing_dot))
 
-                    entry = ctk.CTkEntry(control_frame, width=130, textvariable=value_var)
-                    entry.pack(side="right", padx=(8, 0))
+                    minus_btn = ctk.CTkButton(control_frame, text="-", width=34, height=30)
+                    minus_btn.pack(side="left", padx=(0, 6))
 
-                    slider = ctk.CTkSlider(control_frame, from_=low, to=high, number_of_steps=steps)
-                    slider.pack(side="left", fill="x", expand=True)
-                    slider.set(original_value)
+                    entry = ctk.CTkEntry(control_frame, width=130, textvariable=value_var)
+                    entry.pack(side="left", padx=(0, 6))
+
+                    plus_btn = ctk.CTkButton(control_frame, text="+", width=34, height=30)
+                    plus_btn.pack(side="left", padx=(0, 8))
+
+                    status_label = ctk.CTkLabel(
+                        control_frame,
+                        text="Original",
+                        width=70,
+                        anchor="center",
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                    )
+                    status_label.pack(side="left")
+
+                    step = self._get_param_step(param_name, original_value)
+                    card_search_parts.extend(
+                        [
+                            str(param_name).lower(),
+                            self._friendly_atp_param_label(param_name).lower(),
+                        ]
+                    )
 
                     row_data = {
                         "line_index": line_index,
@@ -1055,21 +1301,40 @@ class ModernLisAnalysisApp(ctk.CTk):
                         "editable": True,
                         "original_value": original_value,
                         "entry": entry,
-                        "slider": slider,
+                        "status_label": status_label,
                         "var": value_var,
                         "invalid": False,
                         "_updating": False,
-                        "slider_min": low,
-                        "slider_max": high,
+                        "step": step,
                         "keep_trailing_dot": keep_trailing_dot,
                         "default_fg_color": entry.cget("fg_color"),
                         "default_border_color": entry.cget("border_color"),
+                        "default_border_width": entry.cget("border_width"),
+                        "default_text_color": entry.cget("text_color"),
+                        "_repeat_job": None,
+                        "_repeat_direction": 0,
                     }
 
-                    slider.configure(command=lambda v, r=row_data: self._on_atp_slider_changed(r, float(v)))
+                    minus_btn.bind("<ButtonPress-1>", lambda _e, r=row_data: self._start_adjust_repeat(r, -1))
+                    minus_btn.bind("<ButtonRelease-1>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+                    minus_btn.bind("<Leave>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+
+                    plus_btn.bind("<ButtonPress-1>", lambda _e, r=row_data: self._start_adjust_repeat(r, +1))
+                    plus_btn.bind("<ButtonRelease-1>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+                    plus_btn.bind("<Leave>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+
                     value_var.trace_add("write", lambda *_args, r=row_data: self._on_atp_entry_changed(r))
 
                     self._atp_param_rows.append(row_data)
+                    self._set_atp_row_visual_state(row_data, "normal")
+
+                self._atp_section_widgets[etype]["cards"].append(
+                    {
+                        "widget": card,
+                        "search_text": " ".join(card_search_parts),
+                        "visible": True,
+                    }
+                )
 
         if not self._atp_param_rows:
             self.atp_param_status_var.set("Nenhum componente editavel detectado")
@@ -1082,6 +1347,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
         self.log(
             f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
         )
@@ -1540,6 +1806,10 @@ class ModernLisAnalysisApp(ctk.CTk):
             atp_overrides = self._collect_atp_parameter_overrides()
         except Exception as e:
             self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(e))])
+            return
+
+        if atp_overrides and not self._confirm_atp_overrides_preview(atp_overrides):
+            self.log("[ATP] Execucao cancelada pelo usuario no preview de alteracoes")
             return
 
         self._set_atp_feedback_running()

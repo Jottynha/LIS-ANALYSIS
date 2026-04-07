@@ -1,6 +1,7 @@
 import threading
 import traceback
 import json
+import re
 import sys
 import os
 import subprocess
@@ -31,7 +32,9 @@ try:
         save_time_series_to_excel,
         criar_grafico_series_temporais,
     )
-    from solver.atp_runner import run_atp_solver
+    from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
+    from atp_parser import parse_atp_file, get_editable_parameters, update_parameter
+    from atp_writer import write_atp_file
     from control_detector import (
         ControlDetector,
         FileControlInfo,
@@ -89,6 +92,12 @@ def _open_in_file_manager(path: Path):
         messagebox.showerror('Erro ao abrir', str(e))
 
 
+def _read_text_lines_preserve_newlines(path: Path) -> list[str]:
+    """Lê arquivo texto preservando terminadores de linha originais."""
+    with path.open("r", encoding="latin-1", errors="replace", newline="") as f:
+        return f.read().splitlines(keepends=True)
+
+
 class ModernLisAnalysisApp(ctk.CTk):
     def __init__(self, folder: Path, outdir: Path, start_index: int = 1):
         super().__init__()
@@ -128,6 +137,17 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
+        self.atp_param_status_var = tk.StringVar(value="Nenhum parametro carregado")
+        self._atp_elements_cache = []
+        self._atp_original_lines_cache = []
+        self._atp_param_rows = []
+        self.atp_param_filter_var = tk.StringVar(value="")
+        self.parameter_overrides = {}
+        self._atp_section_collapsed = {"branch": False, "switch": False, "source": False}
+        self._atp_section_widgets = {}
+        self._atp_section_order = ["branch", "switch", "source"]
+        self._atp_filter_no_results_label = None
+        self.atp_params_scroll_frame = None
         
         
         # Opções de visualização de gráficos
@@ -480,20 +500,86 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=120
         ).pack(side="left")
 
-        info_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        info_card.pack(fill="x", pady=(0, 15))
+        params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        params_card.pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(
-            info_card,
-            text="Status da Integracao ATP",
+            params_card,
+            text="Parametros editaveis do .atp",
             font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
+        ).pack(anchor="w", padx=15, pady=(15, 8))
 
         ctk.CTkLabel(
-            info_card,
-            text="A simulacao usa runATP.exe no mesmo diretorio do arquivo .atp e aguarda o termino da execucao.",
+            params_card,
+            text="Detecta automaticamente R/L/C/V/I e permite editar valores antes da simulacao.",
             justify="left"
-        ).pack(anchor="w", padx=15, pady=(0, 15))
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
+        params_actions = ctk.CTkFrame(params_card, fg_color="transparent")
+        params_actions.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkButton(
+            params_actions,
+            text="Detectar parametros",
+            command=self._load_atp_parameters,
+            width=180
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            params_actions,
+            text="Baixar TXT",
+            command=self._export_atp_parameters_txt,
+            width=150
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            params_actions,
+            text="Aplicar alteracoes",
+            command=self._apply_atp_parameter_changes,
+            width=170,
+            fg_color="#2E7D32",
+            hover_color="#1B5E20"
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            params_actions,
+            text="Resetar alteracoes",
+            command=self._reset_atp_parameter_changes,
+            width=170,
+            fg_color="#757575",
+            hover_color="#616161"
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkLabel(
+            params_actions,
+            textvariable=self.atp_param_status_var,
+            font=ctk.CTkFont(size=12)
+        ).pack(side="left", padx=10)
+
+        filter_row = ctk.CTkFrame(params_card, fg_color="transparent")
+        filter_row.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(filter_row, text="Buscar nó/parâmetro:").pack(side="left", padx=(0, 8))
+
+        filter_entry = ctk.CTkEntry(
+            filter_row,
+            width=320,
+            textvariable=self.atp_param_filter_var,
+            placeholder_text="Ex.: X0001A, resistência, branch...",
+        )
+        filter_entry.pack(side="left", fill="x", expand=True)
+
+        ctk.CTkButton(
+            filter_row,
+            text="Limpar",
+            width=90,
+            command=lambda: self.atp_param_filter_var.set(""),
+        ).pack(side="left", padx=(8, 0))
+
+        self.atp_param_filter_var.trace_add("write", lambda *_args: self._apply_atp_parameter_filter())
+
+        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=260)
+        self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
@@ -621,7 +707,809 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         if file:
             self.atp_file_var.set(file)
+            self._clear_atp_parameter_editor()
+            self._load_atp_parameters(show_dialog_errors=False)
             self._save_prefs()
+
+    def _clear_atp_parameter_editor(self):
+        """Limpa a lista visual e caches de parametros ATP detectados."""
+        for row in self._atp_param_rows:
+            job = row.get("_repeat_job")
+            if job is None:
+                continue
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+
+        self._atp_elements_cache = []
+        self._atp_original_lines_cache = []
+        self._atp_param_rows = []
+        self.parameter_overrides = {}
+        self._atp_section_widgets = {}
+        self._atp_filter_no_results_label = None
+        self.atp_param_status_var.set("Nenhum parametro carregado")
+
+        if self.atp_params_scroll_frame is None:
+            return
+
+        for widget in self.atp_params_scroll_frame.winfo_children():
+            widget.destroy()
+
+    def _apply_atp_parameter_filter(self):
+        if self.atp_params_scroll_frame is None:
+            return
+
+        query = self.atp_param_filter_var.get().strip().lower()
+        total_visible_cards = 0
+
+        for section_key in self._atp_section_order:
+            section_data = self._atp_section_widgets.get(section_key)
+            if not section_data:
+                continue
+
+            visible_cards = 0
+            for card_data in section_data.get("cards", []):
+                widget = card_data["widget"]
+                should_show = (not query) or (query in card_data.get("search_text", ""))
+
+                if should_show:
+                    visible_cards += 1
+                    if not card_data.get("visible", True):
+                        widget.pack(fill="x", padx=10, pady=6)
+                        card_data["visible"] = True
+                else:
+                    if card_data.get("visible", True):
+                        widget.pack_forget()
+                        card_data["visible"] = False
+
+            section_frame = section_data.get("section")
+            if section_frame is None:
+                continue
+
+            if visible_cards > 0:
+                total_visible_cards += visible_cards
+                if not section_data.get("section_visible", True):
+                    section_frame.pack(fill="x", padx=4, pady=(6, 8))
+                    section_data["section_visible"] = True
+                self._apply_atp_section_visibility(section_key)
+            else:
+                if section_data.get("section_visible", True):
+                    section_frame.pack_forget()
+                    section_data["section_visible"] = False
+
+        if query and total_visible_cards == 0:
+            if self._atp_filter_no_results_label is None:
+                self._atp_filter_no_results_label = ctk.CTkLabel(
+                    self.atp_params_scroll_frame,
+                    text="Nenhum parâmetro corresponde ao filtro informado.",
+                    justify="left",
+                )
+            self._atp_filter_no_results_label.pack(anchor="w", padx=8, pady=8)
+        else:
+            if self._atp_filter_no_results_label is not None:
+                self._atp_filter_no_results_label.pack_forget()
+
+    def _apply_atp_section_visibility(self, section_key: str):
+        section_data = self._atp_section_widgets.get(section_key)
+        if not section_data:
+            return
+
+        body = section_data.get("body")
+        toggle = section_data.get("toggle")
+        if body is None or toggle is None:
+            return
+
+        collapsed = bool(self._atp_section_collapsed.get(section_key, False))
+        if collapsed:
+            body.pack_forget()
+            toggle.configure(text="▸")
+        else:
+            body.pack(fill="x", padx=10, pady=(0, 8))
+            toggle.configure(text="▾")
+
+    def _toggle_atp_section(self, section_key: str):
+        current = bool(self._atp_section_collapsed.get(section_key, False))
+        self._atp_section_collapsed[section_key] = not current
+        self._apply_atp_section_visibility(section_key)
+
+    def _friendly_atp_param_label(self, param_name: str) -> str:
+        labels = {
+            "resistance": "Resistência (Ω)",
+            "inductance": "Indutância (H)",
+            "capacitance": "Capacitância (F)",
+            "t_close": "Tempo de fechamento (s)",
+            "delay": "Atraso (s)",
+            "amplitude": "Amplitude",
+            "frequency": "Frequência (Hz)",
+            "phase": "Fase (graus)",
+        }
+        return labels.get(param_name, param_name)
+
+    def _extract_element_identifier(self, element: dict) -> str:
+        """Extrai identificação amigável do elemento com base nos nós da linha RAW."""
+        raw_line = str(element.get("raw_line", ""))
+        first_token = raw_line.strip().split()[0] if raw_line.strip() else ""
+        node_matches = re.findall(r"[A-Za-z]\d{4}[A-Za-z]", first_token)
+        element_type = str(element.get("type", "")).lower()
+
+        if element_type in {"branch", "switch"}:
+            if len(node_matches) >= 2:
+                return f"{node_matches[0]} → {node_matches[1]}"
+            if len(first_token) >= 12:
+                return f"{first_token[:6]} → {first_token[6:12]}"
+        elif element_type == "source":
+            if node_matches:
+                return node_matches[0]
+
+        return first_token if first_token else "Nao identificado"
+
+    def _validate_numeric_input(self, new_value: str) -> bool:
+        """Validação de entrada para bloquear caracteres inválidos em campos numéricos ATP."""
+        if new_value == "":
+            return True
+
+        pattern = r"^-?\d*\.?\d*$"
+        return re.match(pattern, new_value) is not None
+
+    def _is_non_negative_parameter(self, param_name: str) -> bool:
+        return param_name in {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
+
+    def _get_param_step(self, param_name: str, original_value: float) -> float:
+        if param_name in {"t_close", "delay"}:
+            return 0.0001
+        if param_name == "phase":
+            return 1.0
+
+        abs_value = abs(float(original_value))
+        if abs_value >= 1000:
+            return 10.0
+        if abs_value >= 100:
+            return 1.0
+        if abs_value >= 10:
+            return 0.1
+        if abs_value >= 1:
+            return 0.01
+        if abs_value >= 0.1:
+            return 0.001
+        return 0.0001
+
+    def _format_param_value(self, value: float, keep_trailing_dot: bool = False) -> str:
+        if keep_trailing_dot and float(value).is_integer():
+            return f"{int(value)}."
+        return f"{float(value):.10g}"
+
+    def _refresh_atp_param_status(self):
+        total = len(self._atp_param_rows)
+        changed = len(self.parameter_overrides)
+        invalid = sum(1 for row in self._atp_param_rows if bool(row.get("invalid", False)))
+
+        if total == 0:
+            self.atp_param_status_var.set("Nenhum parametro carregado")
+            return
+
+        status = f"{total} parametro(s) editavel(eis) | {changed} alteracao(oes)"
+        if invalid:
+            status += f" | {invalid} invalido(s)"
+        self.atp_param_status_var.set(status)
+
+    def _set_atp_row_visual_state(self, row: dict, state: str):
+        entry = row["entry"]
+        status_label = row.get("status_label")
+        if state == "invalid":
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color="#DC2626",
+                border_width=2,
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Inválido", text_color=("#B91C1C", "#FCA5A5"))
+        elif state == "changed":
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color="#D97706",
+                border_width=2,
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Alterado", text_color=("#B45309", "#FCD34D"))
+        else:
+            entry.configure(
+                fg_color=row["default_fg_color"],
+                border_color=row["default_border_color"],
+                border_width=row["default_border_width"],
+                text_color=row["default_text_color"],
+            )
+            if status_label is not None:
+                status_label.configure(text="Original", text_color=("#4B5563", "#94A3B8"))
+
+    def _update_atp_parameter_row(self, row: dict, source: str = "entry"):
+        key = (int(row["line_index"]), str(row["parameter"]))
+        raw = row["var"].get().strip()
+
+        if raw == "":
+            row["invalid"] = True
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "invalid")
+            self._refresh_atp_param_status()
+            return
+
+        normalized = raw.replace("D", "E").replace("d", "e")
+        try:
+            parsed_value = float(normalized)
+        except ValueError:
+            row["invalid"] = True
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "invalid")
+            self._refresh_atp_param_status()
+            return
+
+        row["invalid"] = False
+
+        original_value = float(row["original_value"])
+        if abs(parsed_value - original_value) > 1e-15:
+            self.parameter_overrides[key] = float(parsed_value)
+            self._set_atp_row_visual_state(row, "changed")
+        else:
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "normal")
+
+        self._refresh_atp_param_status()
+
+    def _on_atp_entry_changed(self, row: dict):
+        if row.get("_updating", False):
+            return
+        self._update_atp_parameter_row(row, source="entry")
+
+    def _adjust_atp_parameter(self, row: dict, direction: int):
+        if row.get("_updating", False):
+            return
+
+        raw = row["var"].get().strip()
+        normalized = raw.replace("D", "E").replace("d", "e")
+        try:
+            current = float(normalized)
+        except ValueError:
+            current = float(row["original_value"])
+
+        new_value = current + (float(direction) * float(row["step"]))
+        if self._is_non_negative_parameter(str(row.get("parameter", ""))):
+            new_value = max(0.0, new_value)
+
+        row["_updating"] = True
+        row["var"].set(self._format_param_value(float(new_value), keep_trailing_dot=row["keep_trailing_dot"]))
+        row["_updating"] = False
+        self._update_atp_parameter_row(row, source="buttons")
+
+    def _reset_single_atp_parameter(self, row: dict):
+        """Reseta um único parâmetro para valor original e remove override correspondente."""
+        row["_updating"] = True
+        original = float(row["original_value"])
+        row["var"].set(self._format_param_value(original, keep_trailing_dot=row["keep_trailing_dot"]))
+        row["_updating"] = False
+        row["invalid"] = False
+
+        key = (int(row["line_index"]), str(row["parameter"]))
+        self.parameter_overrides.pop(key, None)
+        self._set_atp_row_visual_state(row, "normal")
+        self._refresh_atp_param_status()
+
+    def _repeat_adjust_tick(self, row: dict):
+        direction = int(row.get("_repeat_direction", 0))
+        if direction == 0:
+            row["_repeat_job"] = None
+            return
+
+        self._adjust_atp_parameter(row, direction)
+        row["_repeat_job"] = self.after(90, lambda r=row: self._repeat_adjust_tick(r))
+
+    def _start_adjust_repeat(self, row: dict, direction: int):
+        self._stop_adjust_repeat(row)
+        row["_repeat_direction"] = int(direction)
+
+        # Primeiro passo imediato, depois repete enquanto pressionado.
+        self._adjust_atp_parameter(row, int(direction))
+        row["_repeat_job"] = self.after(350, lambda r=row: self._repeat_adjust_tick(r))
+
+    def _stop_adjust_repeat(self, row: dict):
+        row["_repeat_direction"] = 0
+        job = row.get("_repeat_job")
+        if job is None:
+            return
+        try:
+            self.after_cancel(job)
+        except Exception:
+            pass
+        row["_repeat_job"] = None
+
+    def _apply_atp_parameter_changes(self):
+        """Valida campos e confirma alterações no estado da interface."""
+        try:
+            overrides = self._collect_atp_parameter_overrides()
+        except Exception as e:
+            self._show_error("Erro", "Existem valores invalidos no editor ATP.", details=[("Detalhes", str(e))])
+            return
+
+        if not overrides:
+            self._show_info("Parametros ATP", "Nenhuma alteracao pendente para aplicar.")
+            return
+
+        self.log(f"[ATP] Alteracoes confirmadas na interface: {len(overrides)} parametro(s)")
+        self._show_success(
+            "Alteracoes aplicadas",
+            "As alteracoes foram registradas e serao usadas no proximo Run Simulation.",
+            details=[("Parametros alterados", str(len(overrides)))],
+        )
+
+    def _reset_atp_parameter_changes(self):
+        """Restaura todos os campos para os valores originais detectados."""
+        if not self._atp_param_rows:
+            self._show_info("Parametros ATP", "Nenhum parametro carregado para resetar.")
+            return
+
+        for row in self._atp_param_rows:
+            row["_updating"] = True
+            original = float(row["original_value"])
+            row["var"].set(self._format_param_value(original, keep_trailing_dot=row["keep_trailing_dot"]))
+            row["_updating"] = False
+            row["invalid"] = False
+            self._set_atp_row_visual_state(row, "normal")
+
+        self.parameter_overrides = {}
+        self._refresh_atp_param_status()
+        self.log("[ATP] Alteracoes de parametros resetadas para valores originais")
+
+    def _build_atp_overrides_preview_table(self, overrides: list[dict]) -> str:
+        header = f"{'Elemento':<30} {'Parametro':<22} {'Valor'}"
+        lines = [header, "-" * len(header)]
+
+        max_rows = 80
+        for item in overrides[:max_rows]:
+            name = str(item.get("name", ""))[:30]
+            parameter = self._friendly_atp_param_label(str(item.get("parameter", "")))[:22]
+            old_value = self._format_param_value(float(item.get("old_value", 0.0)))
+            new_value = self._format_param_value(float(item.get("new_value", 0.0)))
+            lines.append(f"{name:<30} {parameter:<22} {old_value} -> {new_value}")
+
+        if len(overrides) > max_rows:
+            lines.append(f"... +{len(overrides) - max_rows} alteracao(oes) adicionais")
+
+        return "\n".join(lines)
+
+    def _confirm_atp_overrides_preview(self, overrides: list[dict]) -> bool:
+        """Mostra preview de alterações e pede confirmação para executar a simulação."""
+        if not overrides:
+            return True
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Preview de alteracoes ATP")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        result = {"confirmed": False}
+
+        container = ctk.CTkFrame(dialog, corner_radius=12)
+        container.pack(fill="both", expand=True, padx=14, pady=14)
+
+        ctk.CTkLabel(
+            container,
+            text="Preview de alteracoes antes do Run Simulation",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(12, 6))
+
+        ctk.CTkLabel(
+            container,
+            text=f"{len(overrides)} parametro(s) alterado(s). Confirma execucao com estas alteracoes?",
+            anchor="w",
+            justify="left",
+        ).pack(fill="x", padx=12, pady=(0, 8))
+
+        preview_text = self._build_atp_overrides_preview_table(overrides)
+        preview_box = ctk.CTkTextbox(container, width=760, height=260, wrap="none")
+        preview_box.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        preview_box.insert("1.0", preview_text)
+        preview_box.configure(state="disabled")
+
+        buttons = ctk.CTkFrame(container, fg_color="transparent")
+        buttons.pack(fill="x", padx=12, pady=(0, 12))
+
+        def _cancel(_event=None):
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        def _confirm(_event=None):
+            result["confirmed"] = True
+            _cancel()
+
+        ctk.CTkButton(buttons, text="Cancelar", width=130, fg_color="#757575", hover_color="#616161", command=_cancel).pack(side="right")
+        ctk.CTkButton(buttons, text="Continuar", width=130, fg_color="#2E7D32", hover_color="#1B5E20", command=_confirm).pack(side="right", padx=(0, 8))
+
+        dialog.bind("<Escape>", _cancel)
+        dialog.bind("<Return>", _confirm)
+
+        dialog.update_idletasks()
+        width = max(760, min(dialog.winfo_reqwidth(), 980))
+        height = max(430, min(dialog.winfo_reqheight(), 700))
+
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        pos_x = parent_x + (parent_w - width) // 2
+        pos_y = parent_y + (parent_h - height) // 2
+        dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        dialog.lift()
+        dialog.focus_force()
+        self.wait_window(dialog)
+
+        return bool(result["confirmed"])
+
+    def _load_atp_parameters(self, show_dialog_errors: bool = True):
+        """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._clear_atp_parameter_editor()
+            if show_dialog_errors:
+                self._show_error("Erro", "Arquivo .atp nao encontrado para detectar parametros.")
+            return
+
+        try:
+            elements = parse_atp_file(atp_file)
+            editable = get_editable_parameters(elements)
+        except Exception as e:
+            self._clear_atp_parameter_editor()
+            if show_dialog_errors:
+                self._show_error("Erro", "Falha ao analisar arquivo .atp.", details=[("Detalhes", str(e))])
+            return
+
+        self._clear_atp_parameter_editor()
+        self._atp_elements_cache = elements
+        self._atp_original_lines_cache = _read_text_lines_preserve_newlines(Path(atp_file))
+
+        if not editable:
+            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            if self.atp_params_scroll_frame is not None:
+                ctk.CTkLabel(
+                    self.atp_params_scroll_frame,
+                    text="Nao foram encontrados componentes R/L/C/V/I editaveis neste arquivo.",
+                    justify="left"
+                ).pack(anchor="w", padx=6, pady=6)
+            self.log("[ATP] Nenhum parametro editavel detectado no .atp selecionado")
+            return
+
+        group_titles = {
+            "branch": "BRANCHES",
+            "switch": "SWITCHES",
+            "source": "SOURCES",
+        }
+        grouped_elements = {"branch": [], "switch": [], "source": []}
+
+        for element in self._atp_elements_cache:
+            etype = str(element.get("type", "")).lower()
+            if etype not in grouped_elements:
+                continue
+
+            params = element.get("parameters", {})
+            if not isinstance(params, dict):
+                continue
+
+            editable_params = []
+            for param_name, meta in params.items():
+                if not isinstance(meta, dict):
+                    continue
+                if not bool(meta.get("editable", True)):
+                    continue
+                editable_params.append((str(param_name), meta))
+
+            if editable_params:
+                grouped_elements[etype].append((element, editable_params))
+
+        vcmd_numeric = (self.register(self._validate_numeric_input), "%P")
+        total_cards = 0
+        for etype in ("branch", "switch", "source"):
+            items = grouped_elements.get(etype, [])
+            if not items:
+                continue
+
+            section = ctk.CTkFrame(self.atp_params_scroll_frame, corner_radius=10)
+            section.pack(fill="x", padx=4, pady=(6, 8))
+
+            header = ctk.CTkFrame(section, fg_color="transparent")
+            header.pack(fill="x", padx=12, pady=(10, 4))
+
+            ctk.CTkLabel(
+                header,
+                text=group_titles[etype],
+                font=ctk.CTkFont(size=16, weight="bold"),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
+
+            toggle_btn = ctk.CTkButton(
+                header,
+                text="▾",
+                width=34,
+                height=28,
+                font=ctk.CTkFont(size=16, weight="bold"),
+                command=lambda key=etype: self._toggle_atp_section(key),
+            )
+            toggle_btn.pack(side="right")
+
+            section_body = ctk.CTkFrame(section, fg_color="transparent")
+
+            self._atp_section_widgets[etype] = {
+                "section": section,
+                "body": section_body,
+                "toggle": toggle_btn,
+                "cards": [],
+                "section_visible": True,
+            }
+            self._apply_atp_section_visibility(etype)
+
+            for element, editable_params in items:
+                element_id = self._extract_element_identifier(element)
+                title_prefix = etype.upper()
+                card = ctk.CTkFrame(section_body, corner_radius=10, fg_color=("#EDEFF3", "#2B3138"))
+                card.pack(fill="x", padx=10, pady=(8, 12))
+                total_cards += 1
+
+                inner_frame = ctk.CTkFrame(card, fg_color="transparent")
+                inner_frame.pack(fill="x", padx=10, pady=8)
+
+                ctk.CTkLabel(
+                    inner_frame,
+                    text=f"🔌 Linha {element_id}",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    anchor="w",
+                ).pack(fill="x", pady=(0, 6))
+
+                card_search_parts = [title_prefix.lower(), element_id.lower(), f"linha {element_id.lower()}"]
+
+                for param_name, meta in editable_params:
+                    param_row = ctk.CTkFrame(inner_frame, fg_color="transparent")
+                    param_row.pack(fill="x", pady=(2, 8))
+
+                    ctk.CTkLabel(
+                        param_row,
+                        text=self._friendly_atp_param_label(param_name),
+                        width=170,
+                        anchor="w",
+                    ).pack(side="left", padx=(0, 8))
+
+                    control_frame = ctk.CTkFrame(param_row, fg_color="transparent")
+                    control_frame.pack(side="left", fill="x", expand=True)
+
+                    original_value = float(meta.get("original_value", meta.get("value", 0.0)))
+                    line_index = int(element.get("line_index", -1))
+                    field_start = int(meta.get("start", -1))
+                    field_end = int(meta.get("end", -1))
+                    raw_line = str(element.get("raw_line", ""))
+                    field_text = raw_line[field_start:field_end] if 0 <= field_start < field_end <= len(raw_line) else ""
+                    keep_trailing_dot = re.match(r"^[+-]?\d+\.$", field_text.strip()) is not None
+                    value_var = tk.StringVar(value=self._format_param_value(original_value, keep_trailing_dot))
+
+                    minus_btn = ctk.CTkButton(control_frame, text="-", width=34, height=30)
+                    minus_btn.pack(side="left", padx=(0, 6))
+
+                    entry = ctk.CTkEntry(control_frame, width=130, textvariable=value_var)
+                    entry.pack(side="left", padx=(0, 6))
+                    entry.configure(validate="key", validatecommand=vcmd_numeric)
+
+                    plus_btn = ctk.CTkButton(control_frame, text="+", width=34, height=30)
+                    plus_btn.pack(side="left", padx=(0, 6))
+
+                    reset_btn = ctk.CTkButton(control_frame, text="↺", width=34, height=30)
+                    reset_btn.pack(side="left", padx=(0, 8))
+
+                    status_label = ctk.CTkLabel(
+                        control_frame,
+                        text="Original",
+                        width=70,
+                        anchor="center",
+                        font=ctk.CTkFont(size=11, weight="bold"),
+                    )
+                    status_label.pack(side="left")
+
+                    step = self._get_param_step(param_name, original_value)
+                    card_search_parts.extend(
+                        [
+                            str(param_name).lower(),
+                            self._friendly_atp_param_label(param_name).lower(),
+                        ]
+                    )
+
+                    row_data = {
+                        "line_index": line_index,
+                        "name": f"Linha {element_id}",
+                        "parameter": param_name,
+                        "editable": True,
+                        "original_value": original_value,
+                        "entry": entry,
+                        "status_label": status_label,
+                        "var": value_var,
+                        "invalid": False,
+                        "_updating": False,
+                        "step": step,
+                        "keep_trailing_dot": keep_trailing_dot,
+                        "default_fg_color": entry.cget("fg_color"),
+                        "default_border_color": entry.cget("border_color"),
+                        "default_border_width": entry.cget("border_width"),
+                        "default_text_color": entry.cget("text_color"),
+                        "_repeat_job": None,
+                        "_repeat_direction": 0,
+                    }
+
+                    minus_btn.bind("<ButtonPress-1>", lambda _e, r=row_data: self._start_adjust_repeat(r, -1))
+                    minus_btn.bind("<ButtonRelease-1>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+                    minus_btn.bind("<Leave>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+
+                    plus_btn.bind("<ButtonPress-1>", lambda _e, r=row_data: self._start_adjust_repeat(r, +1))
+                    plus_btn.bind("<ButtonRelease-1>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+                    plus_btn.bind("<Leave>", lambda _e, r=row_data: self._stop_adjust_repeat(r))
+
+                    reset_btn.configure(command=lambda r=row_data: self._reset_single_atp_parameter(r))
+
+                    value_var.trace_add("write", lambda *_args, r=row_data: self._on_atp_entry_changed(r))
+
+                    self._atp_param_rows.append(row_data)
+                    self._set_atp_row_visual_state(row_data, "normal")
+
+                self._atp_section_widgets[etype]["cards"].append(
+                    {
+                        "widget": card,
+                        "search_text": " ".join(card_search_parts),
+                        "visible": True,
+                    }
+                )
+
+        if not self._atp_param_rows:
+            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            ctk.CTkLabel(
+                self.atp_params_scroll_frame,
+                text="Nao foram encontrados parametros editaveis para BRANCHES, SWITCHES ou SOURCES.",
+                justify="left",
+            ).pack(anchor="w", padx=8, pady=8)
+            self.log("[ATP] Nenhum parametro editavel para interface por elementos")
+            return
+
+        self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
+        self.log(
+            f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
+        )
+
+    def _collect_atp_parameter_overrides(self) -> list[dict]:
+        """Coleta alterações de parametros ATP digitadas na GUI."""
+        overrides = []
+        invalid_items = []
+
+        for row in self._atp_param_rows:
+            if not bool(row.get("editable", True)):
+                continue
+
+            raw = row["var"].get().strip()
+            name = row["name"]
+            parameter = row["parameter"]
+            line_index = row["line_index"]
+            original_value = row["original_value"]
+
+            if raw == "":
+                invalid_items.append(f"{name} ({parameter}): valor vazio")
+                continue
+
+            normalized = raw.replace("D", "E").replace("d", "e")
+            try:
+                new_value = float(normalized)
+            except ValueError:
+                invalid_items.append(f"{name} ({parameter}): '{raw}'")
+                continue
+
+            if abs(new_value - original_value) <= 1e-15:
+                continue
+
+            self.parameter_overrides[(int(line_index), str(parameter))] = float(new_value)
+            overrides.append(
+                {
+                    "line_index": line_index,
+                    "name": name,
+                    "parameter": parameter,
+                    "new_value": new_value,
+                    "old_value": original_value,
+                }
+            )
+
+        # Remove chaves obsoletas (campo voltou ao valor original ou ficou inválido).
+        valid_keys = {(int(o["line_index"]), str(o["parameter"])) for o in overrides}
+        for key in list(self.parameter_overrides.keys()):
+            if key not in valid_keys:
+                self.parameter_overrides.pop(key, None)
+
+        if invalid_items:
+            details = "\n".join(invalid_items[:15])
+            raise ValueError(f"Valores invalidos no editor de parametros ATP:\n{details}")
+
+        return overrides
+
+    def _export_atp_parameters_txt(self):
+        """Exporta para TXT todos os parametros ATP detectados para conferência manual."""
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            return
+
+        if not self._atp_elements_cache:
+            self._load_atp_parameters(show_dialog_errors=False)
+
+        if not self._atp_elements_cache:
+            self._show_warning("Aviso", "Nenhum parametro detectado para exportar.")
+            return
+
+        editable = get_editable_parameters(self._atp_elements_cache)
+        current_values = {
+            (int(row.get("line_index", -1)), str(row.get("parameter", ""))): row["entry"].get().strip()
+            for row in self._atp_param_rows
+        }
+
+        atp_path = Path(atp_file)
+        default_name = f"{atp_path.stem}_parametros_detectados.txt"
+
+        target = filedialog.asksaveasfilename(
+            title="Salvar parametros detectados",
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Texto", "*.txt"), ("Todos", "*.*")],
+        )
+        if not target:
+            return
+
+        lines = [
+            "RELATORIO DE PARAMETROS ATP DETECTADOS",
+            f"Arquivo: {atp_path}",
+            f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            f"Total de elementos detectados: {len(self._atp_elements_cache)}",
+            f"Total de parametros editaveis: {len(editable)}",
+            "",
+        ]
+
+        for idx, element in enumerate(self._atp_elements_cache):
+            line_index = int(element.get("line_index", -1))
+            etype = str(element.get("type", "")).upper()
+            raw_line = str(element.get("raw_line", ""))
+            lines.append(f"[{idx}] Linha {line_index + 1} - {etype}")
+            lines.append(f"RAW: {raw_line}")
+
+            element_params = [p for p in editable if int(p.get("element_index", -1)) == idx]
+            if not element_params:
+                lines.append("  (sem parametros editaveis)")
+                lines.append("")
+                continue
+
+            for param in element_params:
+                field = str(param.get("field", ""))
+                label = str(param.get("label", field))
+                detected = param.get("value")
+                current = current_values.get((line_index, field), "")
+                current_display = current if current != "" else str(detected)
+                status = "editavel" if bool(param.get("editable", True)) else "valor_padrao"
+                lines.append(f"  - {label} [{field}]")
+                lines.append(f"    status: {status}")
+                lines.append(f"    detectado: {detected}")
+                lines.append(f"    campo_gui: {current_display}")
+
+            lines.append("")
+
+        try:
+            Path(target).write_text("\n".join(lines), encoding="utf-8")
+            self.log(f"[ATP] TXT de parametros exportado: {target}")
+            self._show_success("Sucesso", "TXT de parametros exportado com sucesso.", details=[("Arquivo", target)])
+        except Exception as e:
+            self._show_error("Erro", "Falha ao salvar TXT de parametros.", details=[("Detalhes", str(e))])
     
     
     def _clear_filter(self):
@@ -900,6 +1788,35 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error("Erro", "Arquivo .atp nao encontrado.")
             return
 
+        missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
+        if missing_insert_dependencies:
+            preview_limit = 10
+            preview = missing_insert_dependencies[:preview_limit]
+            details = [
+                ("Arquivo ATP", atp_file),
+                ("Diretorio base", str(Path(atp_file).parent)),
+                ("Dependencias ausentes", str(len(missing_insert_dependencies))),
+            ]
+            for line_no, target in preview:
+                details.append((f"Linha {line_no}", target))
+            if len(missing_insert_dependencies) > preview_limit:
+                details.append(("Outros", f"+{len(missing_insert_dependencies) - preview_limit} item(ns)"))
+
+            self.log("Validacao pre-run ATP falhou: dependencia(s) $INSERT ausente(s).")
+            for line_no, target in missing_insert_dependencies:
+                self.log(f" - Linha {line_no}: {target}")
+
+            self._update_simulation_results(
+                "Falha na validacao pre-run ATP:\n"
+                + "\n".join([f"- Linha {line_no}: {target}" for line_no, target in missing_insert_dependencies])
+            )
+            self._show_error(
+                "Dependencias ATP ausentes",
+                "Nao e possivel iniciar a simulacao. Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s).",
+                details=details,
+            )
+            return
+
         outdir_str = self.outdir_var.get().strip()
         if not outdir_str:
             self._show_error("Erro", "Pasta de saida nao informada.")
@@ -916,6 +1833,16 @@ class ModernLisAnalysisApp(ctk.CTk):
             'show_stats_box': self.plot_stats_box_var.get(),
         }
 
+        try:
+            atp_overrides = self._collect_atp_parameter_overrides()
+        except Exception as e:
+            self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(e))])
+            return
+
+        if atp_overrides and not self._confirm_atp_overrides_preview(atp_overrides):
+            self.log("[ATP] Execucao cancelada pelo usuario no preview de alteracoes")
+            return
+
         self._set_atp_feedback_running()
         self.status_var.set("Executando simulacao ATP...")
         self.log(f"Iniciando simulacao ATP para: {atp_file}")
@@ -925,11 +1852,41 @@ class ModernLisAnalysisApp(ctk.CTk):
             def report_progress(message: str):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
+            parametrized_exec_atp = None
             try:
                 import shutil
 
+                execution_atp_path = Path(atp_file)
+                if atp_overrides:
+                    report_progress("Applying ATP parameter overrides...")
+                    elements = parse_atp_file(execution_atp_path)
+                    original_lines = _read_text_lines_preserve_newlines(execution_atp_path)
+                    for override in atp_overrides:
+                        update_parameter(
+                            elements,
+                            element_name=override["name"],
+                            new_value=override["new_value"],
+                            line_index=override["line_index"],
+                            parameter_name=override["parameter"],
+                        )
+
+                    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    parametrized_exec_atp = (
+                        execution_atp_path.parent
+                        / f"{execution_atp_path.stem}__param_{run_tag}{execution_atp_path.suffix}"
+                    )
+                    write_atp_file(elements, original_lines, parametrized_exec_atp)
+                    execution_atp_path = parametrized_exec_atp
+                    report_progress(f"Parameterized ATP ready: {execution_atp_path.name}")
+
                 report_progress("Running ATP solver...")
-                generated_lis_path = Path(run_atp_solver(atp_file, status_callback=report_progress))
+                generated_lis_path = Path(
+                    run_atp_solver(
+                        str(execution_atp_path),
+                        timeout=self._atp_timeout_sec,
+                        status_callback=report_progress,
+                    )
+                )
 
                 report_progress("Preparing output folder...")
                 base_outdir = Path(outdir_str)
@@ -949,38 +1906,66 @@ class ModernLisAnalysisApp(ctk.CTk):
                     # Se mover falhar, segue com o .lis no caminho original.
                     lis_target = generated_lis_path
 
+                generated_atp_snapshot = None
+                if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
+                    generated_atp_snapshot = sim_outdir / parametrized_exec_atp.name
+                    try:
+                        generated_atp_snapshot = Path(
+                            shutil.move(str(parametrized_exec_atp), str(generated_atp_snapshot))
+                        )
+                    except Exception:
+                        try:
+                            shutil.copy2(str(parametrized_exec_atp), str(generated_atp_snapshot))
+                        except Exception:
+                            generated_atp_snapshot = None
+
+                if atp_overrides:
+                    metadata = {
+                        "source_atp": atp_file,
+                        "executed_atp": str(execution_atp_path),
+                        "applied_overrides": atp_overrides,
+                        "generated_atp_in_output": str(generated_atp_snapshot) if generated_atp_snapshot else None,
+                    }
+                    metadata_path = sim_outdir / "parametros_aplicados.json"
+                    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
                 report_progress("Parsing LIS and generating tables...")
                 df, stats_lines, summary = parse_lis_table(lis_target)
+                excel_path = None
+                table_warning = None
                 if df is None:
-                    raise RuntimeError("Tabela alvo nao encontrada no .lis gerado")
-
-                excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
-                save_df_to_excel_only(df, excel_path)
-
-                try:
-                    computed_stats = calcular_estatisticas_do_df(df)
-                    escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
-                except Exception as e:
-                    if not hide_errors:
-                        report_progress(f"Warning: falha em estatisticas: {e}")
-
-                if not only_comparative:
-                    report_progress("Generating chart from analyzed data...")
-                    graph_name = f"grafico_{lis_target.stem}.png"
-                    self._criar_grafico_customizado(
-                        excel_path,
-                        sim_outdir,
-                        graph_name,
-                        plot_options,
-                        mostrar=show_plots,
-                    )
+                    table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
+                    report_progress(f"Warning: {table_warning}")
                 else:
-                    report_progress("Skipping individual chart (only comparative option enabled).")
+                    excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
+                    save_df_to_excel_only(df, excel_path)
+
+                    try:
+                        computed_stats = calcular_estatisticas_do_df(df)
+                        escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
+                    except Exception as e:
+                        if not hide_errors:
+                            report_progress(f"Warning: falha em estatisticas: {e}")
+
+                    if not only_comparative:
+                        report_progress("Generating chart from analyzed data...")
+                        graph_name = f"grafico_{lis_target.stem}.png"
+                        self._criar_grafico_customizado(
+                            excel_path,
+                            sim_outdir,
+                            graph_name,
+                            plot_options,
+                            mostrar=show_plots,
+                        )
+                    else:
+                        report_progress("Skipping individual chart (only comparative option enabled).")
 
                 report_progress("Processing time series...")
                 try:
                     time_series_df = parse_lis_time_series(lis_target)
                     if time_series_df is not None:
+                        if excel_path is None:
+                            excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
                         save_time_series_to_excel(time_series_df, excel_path)
                         criar_grafico_series_temporais(
                             time_series_df,
@@ -995,12 +1980,20 @@ class ModernLisAnalysisApp(ctk.CTk):
                 payload = {
                     "lis_path": str(lis_target),
                     "outdir": str(sim_outdir),
-                    "excel_path": str(excel_path),
+                    "excel_path": str(excel_path) if excel_path else None,
+                    "applied_overrides": len(atp_overrides),
+                    "table_warning": table_warning,
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
+            finally:
+                if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
+                    try:
+                        parametrized_exec_atp.unlink()
+                    except Exception:
+                        pass
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1025,13 +2018,20 @@ class ModernLisAnalysisApp(ctk.CTk):
         if success:
             lis_path = payload["lis_path"] if isinstance(payload, dict) else str(payload)
             outdir = payload.get("outdir") if isinstance(payload, dict) else None
+            overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
+            table_warning = payload.get("table_warning") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
             if outdir:
                 self.log(f"Resultados da analise salvos em: {outdir}")
+            if overrides_count:
+                self.log(f"Parametros ATP aplicados nesta execucao: {overrides_count}")
+            if table_warning:
+                self.log(f"Aviso: {table_warning}")
 
             self._update_simulation_results(
-                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}"
+                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}\nParameter overrides: {overrides_count}"
+                + (f"\nWarning: {table_warning}" if table_warning else "")
             )
 
             if self.save_logs_var.get() and outdir:
@@ -1056,6 +2056,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         else:
             self.status_var.set("Pronto")
             error_msg = str(payload)
+            details = [("Detalhes", error_msg)]
+
+            marker = "Trecho do LIS:"
+            if marker in error_msg:
+                head, excerpt = error_msg.split(marker, 1)
+                details = [("Motivo", head.strip())]
+                excerpt_text = excerpt.strip()
+                if excerpt_text:
+                    details.append(("Trecho do LIS", excerpt_text))
+
             self.log(f"Erro na simulacao ATP: {error_msg}")
             self._update_simulation_results(
                 f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
@@ -1063,7 +2073,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error(
                 "Erro na simulacao ATP",
                 f"Falha apos {elapsed:.1f}s.",
-                details=[("Detalhes", error_msg)],
+                details=details,
             )
 
     def _set_atp_feedback_running(self):

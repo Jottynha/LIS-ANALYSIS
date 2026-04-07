@@ -1,6 +1,7 @@
 import threading
 import traceback
 import json
+import re
 import sys
 import os
 import subprocess
@@ -140,6 +141,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
         self._atp_param_rows = []
+        self.parameter_overrides = {}
+        self._atp_section_collapsed = {"branch": False, "switch": False, "source": False}
+        self._atp_section_widgets = {}
         self.atp_params_scroll_frame = None
         
         
@@ -525,6 +529,24 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=150
         ).pack(side="left", padx=(8, 0))
 
+        ctk.CTkButton(
+            params_actions,
+            text="Aplicar alteracoes",
+            command=self._apply_atp_parameter_changes,
+            width=170,
+            fg_color="#2E7D32",
+            hover_color="#1B5E20"
+        ).pack(side="left", padx=(8, 0))
+
+        ctk.CTkButton(
+            params_actions,
+            text="Resetar alteracoes",
+            command=self._reset_atp_parameter_changes,
+            width=170,
+            fg_color="#757575",
+            hover_color="#616161"
+        ).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(
             params_actions,
             textvariable=self.atp_param_status_var,
@@ -684,6 +706,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
         self._atp_param_rows = []
+        self.parameter_overrides = {}
+        self._atp_section_widgets = {}
         self.atp_param_status_var.set("Nenhum parametro carregado")
 
         if self.atp_params_scroll_frame is None:
@@ -691,6 +715,195 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         for widget in self.atp_params_scroll_frame.winfo_children():
             widget.destroy()
+
+    def _apply_atp_section_visibility(self, section_key: str):
+        section_data = self._atp_section_widgets.get(section_key)
+        if not section_data:
+            return
+
+        body = section_data.get("body")
+        toggle = section_data.get("toggle")
+        if body is None or toggle is None:
+            return
+
+        collapsed = bool(self._atp_section_collapsed.get(section_key, False))
+        if collapsed:
+            body.pack_forget()
+            toggle.configure(text="▸")
+        else:
+            body.pack(fill="x", padx=10, pady=(0, 8))
+            toggle.configure(text="▾")
+
+    def _toggle_atp_section(self, section_key: str):
+        current = bool(self._atp_section_collapsed.get(section_key, False))
+        self._atp_section_collapsed[section_key] = not current
+        self._apply_atp_section_visibility(section_key)
+
+    def _friendly_atp_param_label(self, param_name: str) -> str:
+        labels = {
+            "resistance": "Resistência (Ω)",
+            "inductance": "Indutância (H)",
+            "capacitance": "Capacitância (F)",
+            "t_close": "Tempo de fechamento (s)",
+            "delay": "Atraso (s)",
+            "amplitude": "Amplitude",
+            "frequency": "Frequência (Hz)",
+            "phase": "Fase (graus)",
+        }
+        return labels.get(param_name, param_name)
+
+    def _extract_element_identifier(self, element: dict) -> str:
+        """Extrai identificação amigável do elemento com base nos nós da linha RAW."""
+        raw_line = str(element.get("raw_line", ""))
+        first_token = raw_line.strip().split()[0] if raw_line.strip() else ""
+        node_matches = re.findall(r"[A-Za-z]\d{4}[A-Za-z]", first_token)
+        element_type = str(element.get("type", "")).lower()
+
+        if element_type in {"branch", "switch"}:
+            if len(node_matches) >= 2:
+                return f"{node_matches[0]} -> {node_matches[1]}"
+            if len(first_token) >= 12:
+                return f"{first_token[:6]} -> {first_token[6:12]}"
+        elif element_type == "source":
+            if node_matches:
+                return node_matches[0]
+
+        return first_token if first_token else "Nao identificado"
+
+    def _get_slider_limits(self, param_name: str, original_value: float) -> tuple[float, float, int]:
+        abs_value = abs(float(original_value))
+        span = max(abs_value * 2.0, 1.0)
+        low = float(original_value) - span
+        high = float(original_value) + span
+
+        non_negative_params = {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
+        if param_name in non_negative_params:
+            low = max(0.0, low)
+
+        if math.isclose(low, high, rel_tol=0.0, abs_tol=1e-12):
+            high = low + 1.0
+
+        return low, high, 400
+
+    def _format_param_value(self, value: float, keep_trailing_dot: bool = False) -> str:
+        if keep_trailing_dot and float(value).is_integer():
+            return f"{int(value)}."
+        return f"{float(value):.10g}"
+
+    def _refresh_atp_param_status(self):
+        total = len(self._atp_param_rows)
+        changed = len(self.parameter_overrides)
+        invalid = sum(1 for row in self._atp_param_rows if bool(row.get("invalid", False)))
+
+        if total == 0:
+            self.atp_param_status_var.set("Nenhum parametro carregado")
+            return
+
+        status = f"{total} parametro(s) editavel(eis) | {changed} alteracao(oes)"
+        if invalid:
+            status += f" | {invalid} invalido(s)"
+        self.atp_param_status_var.set(status)
+
+    def _set_atp_row_visual_state(self, row: dict, state: str):
+        entry = row["entry"]
+        if state == "invalid":
+            entry.configure(fg_color="#FDECEC", border_color="#C62828")
+        elif state == "changed":
+            entry.configure(fg_color="#FFF7CC", border_color="#D4A017")
+        else:
+            entry.configure(fg_color=row["default_fg_color"], border_color=row["default_border_color"])
+
+    def _update_atp_parameter_row(self, row: dict, source: str = "entry"):
+        key = (int(row["line_index"]), str(row["parameter"]))
+        raw = row["var"].get().strip()
+
+        if raw == "":
+            row["invalid"] = True
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "invalid")
+            self._refresh_atp_param_status()
+            return
+
+        normalized = raw.replace("D", "E").replace("d", "e")
+        try:
+            parsed_value = float(normalized)
+        except ValueError:
+            row["invalid"] = True
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "invalid")
+            self._refresh_atp_param_status()
+            return
+
+        row["invalid"] = False
+
+        if source == "entry":
+            if not row.get("_updating", False):
+                row["_updating"] = True
+                clamped = min(max(parsed_value, row["slider_min"]), row["slider_max"])
+                row["slider"].set(clamped)
+                row["_updating"] = False
+
+        original_value = float(row["original_value"])
+        if abs(parsed_value - original_value) > 1e-15:
+            self.parameter_overrides[key] = float(parsed_value)
+            self._set_atp_row_visual_state(row, "changed")
+        else:
+            self.parameter_overrides.pop(key, None)
+            self._set_atp_row_visual_state(row, "normal")
+
+        self._refresh_atp_param_status()
+
+    def _on_atp_entry_changed(self, row: dict):
+        if row.get("_updating", False):
+            return
+        self._update_atp_parameter_row(row, source="entry")
+
+    def _on_atp_slider_changed(self, row: dict, value: float):
+        if row.get("_updating", False):
+            return
+
+        row["_updating"] = True
+        row["var"].set(self._format_param_value(float(value), keep_trailing_dot=row["keep_trailing_dot"]))
+        row["_updating"] = False
+        self._update_atp_parameter_row(row, source="slider")
+
+    def _apply_atp_parameter_changes(self):
+        """Valida campos e confirma alterações no estado da interface."""
+        try:
+            overrides = self._collect_atp_parameter_overrides()
+        except Exception as e:
+            self._show_error("Erro", "Existem valores invalidos no editor ATP.", details=[("Detalhes", str(e))])
+            return
+
+        if not overrides:
+            self._show_info("Parametros ATP", "Nenhuma alteracao pendente para aplicar.")
+            return
+
+        self.log(f"[ATP] Alteracoes confirmadas na interface: {len(overrides)} parametro(s)")
+        self._show_success(
+            "Alteracoes aplicadas",
+            "As alteracoes foram registradas e serao usadas no proximo Run Simulation.",
+            details=[("Parametros alterados", str(len(overrides)))],
+        )
+
+    def _reset_atp_parameter_changes(self):
+        """Restaura todos os campos para os valores originais detectados."""
+        if not self._atp_param_rows:
+            self._show_info("Parametros ATP", "Nenhum parametro carregado para resetar.")
+            return
+
+        for row in self._atp_param_rows:
+            row["_updating"] = True
+            original = float(row["original_value"])
+            row["var"].set(self._format_param_value(original, keep_trailing_dot=row["keep_trailing_dot"]))
+            row["slider"].set(original)
+            row["_updating"] = False
+            row["invalid"] = False
+            self._set_atp_row_visual_state(row, "normal")
+
+        self.parameter_overrides = {}
+        self._refresh_atp_param_status()
+        self.log("[ATP] Alteracoes de parametros resetadas para valores originais")
 
     def _load_atp_parameters(self, show_dialog_errors: bool = True):
         """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
@@ -725,50 +938,153 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.log("[ATP] Nenhum parametro editavel detectado no .atp selecionado")
             return
 
-        for row in editable:
-            param_name = str(row.get("field", "value"))
-            param_label = str(row.get("label", param_name))
-            is_editable = bool(row.get("editable", True))
-            element_index = int(row.get("element_index", -1))
-            element_data = (
-                self._atp_elements_cache[element_index]
-                if 0 <= element_index < len(self._atp_elements_cache)
-                else {}
-            )
-            line_index = int(element_data.get("line_index", -1))
-            component_type = str(element_data.get("type", "element")).upper()
-            component = f"Linha {line_index + 1} ({component_type})"
-            current_value = row.get("value", "")
-            value_str = "" if current_value is None else str(current_value)
+        group_titles = {
+            "branch": "BRANCHES",
+            "switch": "SWITCHES",
+            "source": "SOURCES",
+        }
+        grouped_elements = {"branch": [], "switch": [], "source": []}
 
-            item = ctk.CTkFrame(self.atp_params_scroll_frame, corner_radius=8)
-            item.pack(fill="x", padx=4, pady=4)
+        for element in self._atp_elements_cache:
+            etype = str(element.get("type", "")).lower()
+            if etype not in grouped_elements:
+                continue
+
+            params = element.get("parameters", {})
+            if not isinstance(params, dict):
+                continue
+
+            editable_params = []
+            for param_name, meta in params.items():
+                if not isinstance(meta, dict):
+                    continue
+                if not bool(meta.get("editable", True)):
+                    continue
+                editable_params.append((str(param_name), meta))
+
+            if editable_params:
+                grouped_elements[etype].append((element, editable_params))
+
+        total_cards = 0
+        for etype in ("branch", "switch", "source"):
+            items = grouped_elements.get(etype, [])
+            if not items:
+                continue
+
+            section = ctk.CTkFrame(self.atp_params_scroll_frame, corner_radius=10)
+            section.pack(fill="x", padx=4, pady=(6, 8))
+
+            header = ctk.CTkFrame(section, fg_color="transparent")
+            header.pack(fill="x", padx=12, pady=(10, 4))
 
             ctk.CTkLabel(
-                item,
-                text=f"{component}  |  {param_label}",
-                font=ctk.CTkFont(size=12, weight="bold")
-            ).pack(side="left", padx=(8, 8), pady=8)
+                header,
+                text=group_titles[etype],
+                font=ctk.CTkFont(size=16, weight="bold"),
+                anchor="w",
+            ).pack(side="left", fill="x", expand=True)
 
-            entry = ctk.CTkEntry(item, width=220)
-            entry.pack(side="right", padx=8, pady=8)
-            entry.insert(0, value_str)
-            if not is_editable:
-                entry.configure(state="disabled")
-
-            self._atp_param_rows.append(
-                {
-                    "line_index": line_index,
-                    "name": component,
-                    "parameter": param_name,
-                    "editable": is_editable,
-                    "original_value": float(current_value),
-                    "entry": entry,
-                }
+            toggle_btn = ctk.CTkButton(
+                header,
+                text="▾",
+                width=34,
+                height=28,
+                font=ctk.CTkFont(size=16, weight="bold"),
+                command=lambda key=etype: self._toggle_atp_section(key),
             )
+            toggle_btn.pack(side="right")
 
-        self.atp_param_status_var.set(f"{len(self._atp_param_rows)} parametro(s) detectado(s)")
-        self.log(f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)}")
+            section_body = ctk.CTkFrame(section, fg_color="transparent")
+
+            self._atp_section_widgets[etype] = {
+                "body": section_body,
+                "toggle": toggle_btn,
+            }
+            self._apply_atp_section_visibility(etype)
+
+            for element, editable_params in items:
+                element_id = self._extract_element_identifier(element)
+                title_prefix = etype.upper()
+                card = ctk.CTkFrame(section_body, corner_radius=8)
+                card.pack(fill="x", padx=10, pady=6)
+                total_cards += 1
+
+                ctk.CTkLabel(
+                    card,
+                    text=f"[{title_prefix} {element_id}]",
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    anchor="w",
+                ).pack(fill="x", padx=10, pady=(8, 4))
+
+                for param_name, meta in editable_params:
+                    param_row = ctk.CTkFrame(card, fg_color="transparent")
+                    param_row.pack(fill="x", padx=10, pady=(2, 8))
+
+                    ctk.CTkLabel(
+                        param_row,
+                        text=self._friendly_atp_param_label(param_name),
+                        width=170,
+                        anchor="w",
+                    ).pack(side="left", padx=(0, 8))
+
+                    control_frame = ctk.CTkFrame(param_row, fg_color="transparent")
+                    control_frame.pack(side="left", fill="x", expand=True)
+
+                    original_value = float(meta.get("original_value", meta.get("value", 0.0)))
+                    line_index = int(element.get("line_index", -1))
+                    field_start = int(meta.get("start", -1))
+                    field_end = int(meta.get("end", -1))
+                    raw_line = str(element.get("raw_line", ""))
+                    field_text = raw_line[field_start:field_end] if 0 <= field_start < field_end <= len(raw_line) else ""
+                    keep_trailing_dot = re.match(r"^[+-]?\d+\.$", field_text.strip()) is not None
+
+                    low, high, steps = self._get_slider_limits(param_name, original_value)
+                    value_var = tk.StringVar(value=self._format_param_value(original_value, keep_trailing_dot))
+
+                    entry = ctk.CTkEntry(control_frame, width=130, textvariable=value_var)
+                    entry.pack(side="right", padx=(8, 0))
+
+                    slider = ctk.CTkSlider(control_frame, from_=low, to=high, number_of_steps=steps)
+                    slider.pack(side="left", fill="x", expand=True)
+                    slider.set(original_value)
+
+                    row_data = {
+                        "line_index": line_index,
+                        "name": f"{title_prefix} {element_id}",
+                        "parameter": param_name,
+                        "editable": True,
+                        "original_value": original_value,
+                        "entry": entry,
+                        "slider": slider,
+                        "var": value_var,
+                        "invalid": False,
+                        "_updating": False,
+                        "slider_min": low,
+                        "slider_max": high,
+                        "keep_trailing_dot": keep_trailing_dot,
+                        "default_fg_color": entry.cget("fg_color"),
+                        "default_border_color": entry.cget("border_color"),
+                    }
+
+                    slider.configure(command=lambda v, r=row_data: self._on_atp_slider_changed(r, float(v)))
+                    value_var.trace_add("write", lambda *_args, r=row_data: self._on_atp_entry_changed(r))
+
+                    self._atp_param_rows.append(row_data)
+
+        if not self._atp_param_rows:
+            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            ctk.CTkLabel(
+                self.atp_params_scroll_frame,
+                text="Nao foram encontrados parametros editaveis para BRANCHES, SWITCHES ou SOURCES.",
+                justify="left",
+            ).pack(anchor="w", padx=8, pady=8)
+            self.log("[ATP] Nenhum parametro editavel para interface por elementos")
+            return
+
+        self._refresh_atp_param_status()
+        self.log(
+            f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
+        )
 
     def _collect_atp_parameter_overrides(self) -> list[dict]:
         """Coleta alterações de parametros ATP digitadas na GUI."""
@@ -779,7 +1095,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if not bool(row.get("editable", True)):
                 continue
 
-            raw = row["entry"].get().strip()
+            raw = row["var"].get().strip()
             name = row["name"]
             parameter = row["parameter"]
             line_index = row["line_index"]
@@ -799,6 +1115,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if abs(new_value - original_value) <= 1e-15:
                 continue
 
+            self.parameter_overrides[(int(line_index), str(parameter))] = float(new_value)
             overrides.append(
                 {
                     "line_index": line_index,
@@ -808,6 +1125,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                     "old_value": original_value,
                 }
             )
+
+        # Remove chaves obsoletas (campo voltou ao valor original ou ficou inválido).
+        valid_keys = {(int(o["line_index"]), str(o["parameter"])) for o in overrides}
+        for key in list(self.parameter_overrides.keys()):
+            if key not in valid_keys:
+                self.parameter_overrides.pop(key, None)
 
         if invalid_items:
             details = "\n".join(invalid_items[:15])

@@ -731,32 +731,37 @@ class ModernLisAnalysisApp(ctk.CTk):
     
     def _build_status_bar(self):
         """Barra de status inferior"""
-        status_frame = ctk.CTkFrame(self, height=50)
-        status_frame.pack(fill="x", side="bottom", padx=20, pady=(0, 20))
-        
-        # Status text
-        self.status_label = ctk.CTkLabel(
-            status_frame, 
-            textvariable=self.status_var,
-            font=ctk.CTkFont(size=12)
-        )
-        self.status_label.pack(side="left", padx=15)
-        
-        # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(status_frame, width=400)
-        self.progress_bar.pack(side="left", padx=15)
-        self.progress_bar.set(0)
-        
-        # Botão de cancelar (oculto inicialmente)
-        self.cancel_btn = ctk.CTkButton(
-            status_frame, 
-            text="Cancelar", 
-            command=self._cancel_processing,
-            width=100,
-            fg_color="#f44336",
-            hover_color="#d32f2f"
-        )
-        # Não empacotar ainda, só quando houver processamento
+        # Rodape removido da interface. Estado/acoes permanecem via variaveis e logs.
+        self.status_label = None
+        self.progress_bar = None
+        self.cancel_btn = None
+
+    def _set_main_progress(self, value: float):
+        """Atualiza barra principal somente se o widget existir."""
+        if self.progress_bar is None:
+            return
+        try:
+            self.progress_bar.set(float(value))
+        except Exception:
+            pass
+
+    def _show_main_cancel(self):
+        """Exibe botao de cancelar somente se o widget existir."""
+        if self.cancel_btn is None:
+            return
+        try:
+            self.cancel_btn.pack(side="right", padx=15)
+        except Exception:
+            pass
+
+    def _hide_main_cancel(self):
+        """Oculta botao de cancelar somente se o widget existir."""
+        if self.cancel_btn is None:
+            return
+        try:
+            self.cancel_btn.pack_forget()
+        except Exception:
+            pass
     
     # ========== MÉTODOS DE AÇÃO ==========
     
@@ -949,8 +954,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         return param_name in {"resistance", "inductance", "capacitance", "amplitude", "frequency", "t_close"}
 
     def _get_param_step(self, param_name: str, original_value: float) -> float:
+        if param_name == "resistance":
+            return 1.0
+        if param_name == "inductance":
+            return 10.0 if abs(float(original_value)) >= 100.0 else 1.0
+        if param_name == "amplitude":
+            return 1.0
+        if param_name == "frequency":
+            return 5.0
         if param_name in {"t_close", "delay"}:
-            return 0.0001
+            return 0.1
         if param_name == "phase":
             return 1.0
 
@@ -2391,7 +2404,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.status_var.set(f"Processando {len(selected_files)} arquivo(s)...")
         
         # Mostrar botão de cancelar
-        self.cancel_btn.pack(side="right", padx=15)
+        self._show_main_cancel()
         
         def worker():
             try:
@@ -2428,7 +2441,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     
                     # Atualizar progresso
                     progress = idx / total
-                    self.progress_bar.set(progress)
+                    self._set_main_progress(progress)
                     self.status_var.set(f"Processando {lis_path.name}... ({idx}/{total})")
                     
                     self.log(f"Processando: {lis_path.name}")
@@ -2500,7 +2513,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.log(f"Log salvo: {log_file.name}")
                 
                 # Finalizar
-                self.progress_bar.set(1.0)
+                self._set_main_progress(1.0)
                 self.status_var.set(f"Processamento concluído! {len(selected_files)} arquivo(s)")
                 self.log(f"Processamento finalizado com sucesso em: {outdir.name}")
                 
@@ -2527,9 +2540,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                     ),
                 )
             finally:
-                self.cancel_btn.pack_forget()
+                self._hide_main_cancel()
                 self.cancel_event.clear()
-                self.progress_bar.set(0)
+                self._set_main_progress(0)
                 if not self.cancel_event.is_set():
                     self.status_var.set("Pronto")
         

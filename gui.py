@@ -226,6 +226,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_params_scroll_frame = None
         self._simulation_scroll_frame = None
         self._atp_scroll_isolation_bound = False
+        self._atp_scroll_widget_prefixes = ()
+        self._atp_scroll_step_units = 3
         
         
         # Opções de visualização de gráficos
@@ -840,6 +842,19 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _setup_atp_params_scroll_isolation(self):
         """Isola o scroll da lista de parametros ATP para não mover o scroll da aba."""
+        if self.atp_params_scroll_frame is not None:
+            prefixes = [str(self.atp_params_scroll_frame)]
+
+            parent_canvas = getattr(self.atp_params_scroll_frame, "_parent_canvas", None)
+            if parent_canvas is not None:
+                prefixes.append(str(parent_canvas))
+
+            scrollbar = getattr(self.atp_params_scroll_frame, "_scrollbar", None)
+            if scrollbar is not None:
+                prefixes.append(str(scrollbar))
+
+            self._atp_scroll_widget_prefixes = tuple(prefixes)
+
         if self._atp_scroll_isolation_bound:
             return
 
@@ -849,18 +864,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_scroll_isolation_bound = True
 
     def _widget_belongs_to_atp_params(self, widget) -> bool:
-        if widget is None or self.atp_params_scroll_frame is None:
+        if widget is None:
             return False
 
-        names = [str(self.atp_params_scroll_frame)]
-
-        parent_canvas = getattr(self.atp_params_scroll_frame, "_parent_canvas", None)
-        if parent_canvas is not None:
-            names.append(str(parent_canvas))
-
-        scrollbar = getattr(self.atp_params_scroll_frame, "_scrollbar", None)
-        if scrollbar is not None:
-            names.append(str(scrollbar))
+        names = self._atp_scroll_widget_prefixes
+        if not names:
+            return False
 
         widget_name = str(widget)
         for name in names:
@@ -873,7 +882,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         if self.atp_params_scroll_frame is None:
             return None
 
-        widget_under_pointer = self.winfo_containing(event.x_root, event.y_root)
+        widget_under_pointer = getattr(event, "widget", None)
+        if widget_under_pointer is None:
+            widget_under_pointer = self.winfo_containing(event.x_root, event.y_root)
+
         if not self._widget_belongs_to_atp_params(widget_under_pointer):
             return None
 
@@ -883,9 +895,9 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         event_num = getattr(event, "num", None)
         if event_num == 4:
-            units = -1
+            units = -self._atp_scroll_step_units
         elif event_num == 5:
-            units = 1
+            units = self._atp_scroll_step_units
         else:
             delta = int(getattr(event, "delta", 0))
             if delta == 0:
@@ -897,6 +909,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                 units = -int(delta / 120)
                 if units == 0:
                     units = -1 if delta > 0 else 1
+
+            units *= self._atp_scroll_step_units
 
         canvas.yview_scroll(units, "units")
         return "break"

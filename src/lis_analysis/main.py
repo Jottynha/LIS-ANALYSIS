@@ -1260,7 +1260,7 @@ def main():
     # GUI override
     if args.gui:
         try:
-            from gui import launch_gui
+            from .gui import launch_gui
         except Exception as e:
             print('Erro ao carregar GUI:', e)
             raise SystemExit(2)

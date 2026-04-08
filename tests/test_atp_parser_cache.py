@@ -4,8 +4,14 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+import sys
+import importlib
 
-from atp_parser import invalidate_atp_parse_cache, parse_atp_file_cached
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+_atp_parser = importlib.import_module("lis_analysis.atp_parser")
+invalidate_atp_parse_cache = _atp_parser.invalidate_atp_parse_cache
+parse_atp_file_cached = _atp_parser.parse_atp_file_cached
 
 
 def _write_branch_file(path: Path, resistance: str) -> None:

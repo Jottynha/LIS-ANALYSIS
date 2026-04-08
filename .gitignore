@@ -41,6 +41,12 @@ pip-wheel-metadata/
 # Resultado de simulações (opcional, se quiser manter fora do repo)
 Simulation_Result/
 
+# Artefatos gerados da edição de parâmetros ATP
+*_param.atp
+*_param_*.atp
+*__param_*.atp
+*_parametros_detectados.txt
+
 # Arquivos locais de configuração
 .env
 

@@ -14,10 +14,10 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
-from solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
-from atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
-from atp_writer import write_atp_file
-from control_detector import (
+from .solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
+from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
+from .atp_writer import write_atp_file
+from .control_detector import (
     ControlDetector,
     FileControlInfo,
     analyze_workspace_files
@@ -68,7 +68,7 @@ def _ensure_pipeline_imports():
         if _pipeline_imported:
             return
 
-        from main import (
+        from .main import (
             parse_lis_table as _parse_lis_table,
             parse_lis_once as _parse_lis_once,
             save_df_to_excel_only as _save_df_to_excel_only,
@@ -2957,6 +2957,6 @@ def launch_gui(folder: Path, outdir: Path, start_index: int = 1):
 if __name__ == "__main__":
     # Teste standalone
     import sys
-    folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "ACP"
+    folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "data" / "samples" / "ACP"
     outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd() / "Simulation_Result"
     launch_gui(folder, outdir)

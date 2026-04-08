@@ -3,9 +3,17 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+import sys
+import importlib
 
-from atp_parser import parse_atp_file, update_parameter
-from atp_writer import write_atp_file
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+_atp_parser = importlib.import_module("lis_analysis.atp_parser")
+_atp_writer = importlib.import_module("lis_analysis.atp_writer")
+
+parse_atp_file = _atp_parser.parse_atp_file
+update_parameter = _atp_parser.update_parameter
+write_atp_file = _atp_writer.write_atp_file
 
 
 def get_diff_ranges(line1: str, line2: str):

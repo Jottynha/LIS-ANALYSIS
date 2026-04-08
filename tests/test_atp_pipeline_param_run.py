@@ -5,11 +5,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
-from atp_parser import parse_atp_file, update_parameter
-from atp_writer import write_atp_file
-from solver.atp_runner import run_atp_solver
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from lis_analysis.atp_parser import parse_atp_file, update_parameter
+from lis_analysis.atp_writer import write_atp_file
+from lis_analysis.solver.atp_runner import run_atp_solver
 
 
 class _FakeStdin:
@@ -133,7 +136,7 @@ class ATPPipelineParamRunTest(unittest.TestCase):
                 lis_content="LIS OK\n",
             )
 
-            with patch("solver.atp_runner.subprocess.Popen", new=fake_popen):
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
                 started = time.monotonic()
                 lis_path = run_atp_solver(str(parametrized), timeout=30)
                 elapsed = time.monotonic() - started
@@ -162,7 +165,7 @@ class ATPPipelineParamRunTest(unittest.TestCase):
                 lis_content=kill_lis,
             )
 
-            with patch("solver.atp_runner.subprocess.Popen", new=fake_popen):
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
                 with self.assertRaises(RuntimeError) as ctx:
                     run_atp_solver(str(parametrized), timeout=30)
 

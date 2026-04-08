@@ -5,16 +5,20 @@ from pathlib import Path
 
 block_cipher = None
 root_dir = Path.cwd()
+src_dir = root_dir / 'src'
 
 analysis = Analysis(
-    ['main.py'],
-    pathex=[str(root_dir)],
+    ['run.py'],
+    pathex=[str(root_dir), str(src_dir)],
     binaries=[],
     datas=[
-        ('ACP', 'ACP'),
-        ('Listas ATP', 'Listas ATP'),
+        ('data/samples/ACP', 'ACP'),
+        ('data/samples/Listas ATP', 'Listas ATP'),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'lis_analysis.main',
+        'lis_analysis.gui',
+    ],
     hookspath=[],
     hooksconfig={
         # Mantem apenas backends realmente usados pela aplicacao.

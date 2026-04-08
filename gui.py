@@ -2066,11 +2066,20 @@ class ModernLisAnalysisApp(ctk.CTk):
                             parameter_name=override["parameter"],
                         )
 
-                    run_tag = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    parametrized_exec_atp = (
-                        execution_atp_path.parent
-                        / f"{execution_atp_path.stem}__param_{run_tag}{execution_atp_path.suffix}"
-                    )
+                    base_param_name = f"{execution_atp_path.stem}_param{execution_atp_path.suffix}"
+                    parametrized_exec_atp = execution_atp_path.parent / base_param_name
+                    if parametrized_exec_atp.exists():
+                        suffix_idx = 2
+                        while True:
+                            candidate = (
+                                execution_atp_path.parent
+                                / f"{execution_atp_path.stem}_param_{suffix_idx}{execution_atp_path.suffix}"
+                            )
+                            if not candidate.exists():
+                                parametrized_exec_atp = candidate
+                                break
+                            suffix_idx += 1
+
                     write_atp_file(elements, original_lines, parametrized_exec_atp)
                     execution_atp_path = parametrized_exec_atp
                     report_progress(f"Parameterized ATP ready: {execution_atp_path.name}")

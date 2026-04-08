@@ -224,10 +224,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_section_order = ["branch", "switch", "source"]
         self._atp_filter_no_results_label = None
         self.atp_params_scroll_frame = None
+        self._atp_expand_toggle_btn = None
+        self._atp_params_expanded = False
+        self._atp_params_collapsed_height = 260
+        self._atp_params_expanded_height = 760
+        self._sim_atp_card = None
+        self._sim_params_card = None
+        self._sim_action_card = None
         self._simulation_scroll_frame = None
         self._atp_scroll_isolation_bound = False
-        self._atp_scroll_widget_prefixes = ()
-        self._atp_scroll_step_units = 3
+        self._atp_scroll_targets = ()
+        self._atp_scroll_step_units = 10
         
         
         # Opções de visualização de gráficos
@@ -560,6 +567,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         atp_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         atp_card.pack(fill="x", pady=(0, 15))
+        self._sim_atp_card = atp_card
 
         ctk.CTkLabel(
             atp_card,
@@ -583,21 +591,19 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         params_card.pack(fill="x", pady=(0, 15))
+        self._sim_params_card = params_card
+
+        params_header = ctk.CTkFrame(params_card, fg_color="transparent")
+        params_header.pack(fill="x", padx=15, pady=(15, 8))
 
         ctk.CTkLabel(
-            params_card,
+            params_header,
             text="Parametros editaveis do .atp",
             font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 8))
-
-        ctk.CTkLabel(
-            params_card,
-            text="Detecta automaticamente R/L/C/V/I e permite editar valores antes da simulacao.",
-            justify="left"
-        ).pack(anchor="w", padx=15, pady=(0, 8))
+        ).pack(side="left")
 
         params_actions = ctk.CTkFrame(params_card, fg_color="transparent")
-        params_actions.pack(fill="x", padx=15, pady=(0, 8))
+        params_actions.pack(fill="x", padx=15, pady=(0, 6))
 
         ctk.CTkButton(
             params_actions,
@@ -615,15 +621,6 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkButton(
             params_actions,
-            text="Aplicar alteracoes",
-            command=self._apply_atp_parameter_changes,
-            width=170,
-            fg_color="#2E7D32",
-            hover_color="#1B5E20"
-        ).pack(side="left", padx=(8, 0))
-
-        ctk.CTkButton(
-            params_actions,
             text="Resetar alteracoes",
             command=self._reset_atp_parameter_changes,
             width=170,
@@ -631,10 +628,20 @@ class ModernLisAnalysisApp(ctk.CTk):
             hover_color="#616161"
         ).pack(side="left", padx=(8, 0))
 
+        self._atp_expand_toggle_btn = ctk.CTkButton(
+            params_actions,
+            text="Expandir",
+            width=120,
+            fg_color="#455A64",
+            hover_color="#37474F",
+            command=self._toggle_atp_params_expand,
+        )
+        self._atp_expand_toggle_btn.pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(
             params_actions,
             textvariable=self.atp_param_status_var,
-            font=ctk.CTkFont(size=12)
+            font=ctk.CTkFont(size=12, weight="bold")
         ).pack(side="left", padx=10)
 
         filter_row = ctk.CTkFrame(params_card, fg_color="transparent")
@@ -661,10 +668,12 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=260)
         self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
+
         self._setup_atp_params_scroll_isolation()
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
+        self._sim_action_card = action_card
 
         ctk.CTkLabel(
             action_card,
@@ -701,6 +710,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
         self.simulation_results.insert("1.0", "Aguardando execucao da simulacao ATP...\n")
         self.simulation_results.configure(state="disabled")
+        self._apply_atp_params_expand_state()
     
     def _build_logs_tab(self):
         """Aba de Logs"""
@@ -840,20 +850,42 @@ class ModernLisAnalysisApp(ctk.CTk):
         for widget in self.atp_params_scroll_frame.winfo_children():
             widget.destroy()
 
+    def _toggle_atp_params_expand(self):
+        """Alterna modo de foco do container de parâmetros ATP."""
+        self._atp_params_expanded = not bool(self._atp_params_expanded)
+        self._apply_atp_params_expand_state()
+
+    def _apply_atp_params_expand_state(self):
+        """Aplica visualmente o estado expandido/reduzido do container de parâmetros ATP."""
+        if self.atp_params_scroll_frame is not None:
+            if self._atp_params_expanded:
+                target_height = max(self._atp_params_collapsed_height, int(self.winfo_height() * 0.72))
+            else:
+                target_height = self._atp_params_collapsed_height
+            try:
+                self.atp_params_scroll_frame.configure(height=target_height)
+            except Exception:
+                pass
+
+        if self._atp_expand_toggle_btn is not None:
+            self._atp_expand_toggle_btn.configure(
+                text="Reduzir" if self._atp_params_expanded else "Expandir"
+            )
+
     def _setup_atp_params_scroll_isolation(self):
         """Isola o scroll da lista de parametros ATP para não mover o scroll da aba."""
         if self.atp_params_scroll_frame is not None:
-            prefixes = [str(self.atp_params_scroll_frame)]
+            targets = [self.atp_params_scroll_frame]
 
             parent_canvas = getattr(self.atp_params_scroll_frame, "_parent_canvas", None)
             if parent_canvas is not None:
-                prefixes.append(str(parent_canvas))
+                targets.append(parent_canvas)
 
             scrollbar = getattr(self.atp_params_scroll_frame, "_scrollbar", None)
             if scrollbar is not None:
-                prefixes.append(str(scrollbar))
+                targets.append(scrollbar)
 
-            self._atp_scroll_widget_prefixes = tuple(prefixes)
+            self._atp_scroll_targets = tuple(targets)
 
         if self._atp_scroll_isolation_bound:
             return
@@ -867,19 +899,25 @@ class ModernLisAnalysisApp(ctk.CTk):
         if widget is None:
             return False
 
-        names = self._atp_scroll_widget_prefixes
-        if not names:
+        targets = self._atp_scroll_targets
+        if not targets:
             return False
 
-        widget_name = str(widget)
-        for name in names:
-            if widget_name == name or widget_name.startswith(name + "."):
-                return True
+        current = widget
+        while current is not None:
+            for target in targets:
+                if current == target:
+                    return True
+            current = getattr(current, "master", None)
+
         return False
 
     def _on_root_mousewheel_for_atp_params(self, event):
         """Redireciona roda do mouse para o container ATP e bloqueia propagacao para o pai."""
         if self.atp_params_scroll_frame is None:
+            return None
+
+        if self.tabview.get() != "Simulacao ATP":
             return None
 
         widget_under_pointer = getattr(event, "widget", None)
@@ -1062,9 +1100,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         return 0.0001
 
     def _format_param_value(self, value: float, keep_trailing_dot: bool = False) -> str:
-        if keep_trailing_dot and float(value).is_integer():
-            return f"{int(value)}."
-        return f"{float(value):.10g}"
+        value_f = float(value)
+        if value_f.is_integer():
+            return f"{value_f:.1f}"
+        return f"{value_f:.10g}"
 
     def _refresh_atp_param_status(self):
         total = len(self._atp_param_rows)
@@ -1075,9 +1114,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.atp_param_status_var.set("Nenhum parametro carregado")
             return
 
-        status = f"{total} parametro(s) editavel(eis) | {changed} alteracao(oes)"
+        status = f"Editaveis: {total} | Alterados: {changed}"
         if invalid:
-            status += f" | {invalid} invalido(s)"
+            status += f" | Invalidos: {invalid}"
         self.atp_param_status_var.set(status)
 
     def _set_atp_row_visual_state(self, row: dict, state: str):

@@ -224,6 +224,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_section_order = ["branch", "switch", "source"]
         self._atp_filter_no_results_label = None
         self.atp_params_scroll_frame = None
+        self._simulation_scroll_frame = None
+        self._atp_scroll_isolation_bound = False
         
         
         # Opções de visualização de gráficos
@@ -552,6 +554,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self._simulation_scroll_frame = scroll_frame
 
         atp_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         atp_card.pack(fill="x", pady=(0, 15))
@@ -656,6 +659,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=260)
         self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
+        self._setup_atp_params_scroll_isolation()
 
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
@@ -833,6 +837,69 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         for widget in self.atp_params_scroll_frame.winfo_children():
             widget.destroy()
+
+    def _setup_atp_params_scroll_isolation(self):
+        """Isola o scroll da lista de parametros ATP para não mover o scroll da aba."""
+        if self._atp_scroll_isolation_bound:
+            return
+
+        self.bind("<MouseWheel>", self._on_root_mousewheel_for_atp_params, add="+")
+        self.bind("<Button-4>", self._on_root_mousewheel_for_atp_params, add="+")
+        self.bind("<Button-5>", self._on_root_mousewheel_for_atp_params, add="+")
+        self._atp_scroll_isolation_bound = True
+
+    def _widget_belongs_to_atp_params(self, widget) -> bool:
+        if widget is None or self.atp_params_scroll_frame is None:
+            return False
+
+        names = [str(self.atp_params_scroll_frame)]
+
+        parent_canvas = getattr(self.atp_params_scroll_frame, "_parent_canvas", None)
+        if parent_canvas is not None:
+            names.append(str(parent_canvas))
+
+        scrollbar = getattr(self.atp_params_scroll_frame, "_scrollbar", None)
+        if scrollbar is not None:
+            names.append(str(scrollbar))
+
+        widget_name = str(widget)
+        for name in names:
+            if widget_name == name or widget_name.startswith(name + "."):
+                return True
+        return False
+
+    def _on_root_mousewheel_for_atp_params(self, event):
+        """Redireciona roda do mouse para o container ATP e bloqueia propagacao para o pai."""
+        if self.atp_params_scroll_frame is None:
+            return None
+
+        widget_under_pointer = self.winfo_containing(event.x_root, event.y_root)
+        if not self._widget_belongs_to_atp_params(widget_under_pointer):
+            return None
+
+        canvas = getattr(self.atp_params_scroll_frame, "_parent_canvas", None)
+        if canvas is None:
+            return "break"
+
+        event_num = getattr(event, "num", None)
+        if event_num == 4:
+            units = -1
+        elif event_num == 5:
+            units = 1
+        else:
+            delta = int(getattr(event, "delta", 0))
+            if delta == 0:
+                return "break"
+
+            if sys.platform == "darwin":
+                units = -1 if delta > 0 else 1
+            else:
+                units = -int(delta / 120)
+                if units == 0:
+                    units = -1 if delta > 0 else 1
+
+        canvas.yview_scroll(units, "units")
+        return "break"
 
     def _apply_atp_parameter_filter(self):
         if self.atp_params_scroll_frame is None:

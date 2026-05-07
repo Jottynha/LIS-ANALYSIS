@@ -51,6 +51,26 @@ class BatchRunnerExecutionTest(unittest.TestCase):
         branch = next(element for element in elements if element.get("type") == "branch")
         return float(branch["resistance"])
 
+    def _assert_expected_change(self, original_path: Path, generated_path: Path, expect_change: bool) -> None:
+        original_lines = original_path.read_text(encoding="latin-1", errors="replace").splitlines()
+        generated_lines = generated_path.read_text(encoding="latin-1", errors="replace").splitlines()
+
+        self.assertEqual(len(original_lines), len(generated_lines))
+        changed = [(idx, before, after) for idx, (before, after) in enumerate(zip(original_lines, generated_lines)) if before != after]
+
+        if not expect_change:
+            self.assertEqual(changed, [], "Quando o valor do sweep e igual ao original, o ATP deve permanecer identico")
+            return
+
+        self.assertEqual(len(changed), 1, "Cada ATP do sweep deve alterar somente uma linha")
+
+        _line_index, before, after = changed[0]
+        self.assertEqual(len(before), len(after), "A linha alterada nao pode mudar de tamanho")
+
+        diff_positions = [idx for idx, (a, b) in enumerate(zip(before, after)) if a != b]
+        self.assertTrue(diff_positions, "Era esperado ao menos um caractere alterado")
+        self.assertLess(len(diff_positions), 10, "A alteracao deve ficar restrita ao campo numerico")
+
     def test_run_parameter_sweep_creates_isolated_runs(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -129,6 +149,7 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 self.assertEqual(result.lis_path.name, "caso_param.lis")
                 self.assertAlmostEqual(self._read_branch_resistance(result.atp_path), expected_value)
                 self.assertIn(f"RESISTANCE={expected_value}", result.lis_path.read_text(encoding="latin-1"))
+                self._assert_expected_change(base_atp, result.atp_path, expect_change=(expected_value != 5.0))
 
     def test_run_parameter_sweep_continues_after_failure_when_configured(self):
         with tempfile.TemporaryDirectory() as tmpdir:

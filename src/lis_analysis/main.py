@@ -442,6 +442,7 @@ def calcular_estatisticas_do_df(df: pd.DataFrame) -> dict:
     Retorna dict com as métricas numéricas.
     """
     cols = list(df.columns)
+    interval_candidates = ['Interval', 'Intervalo']
     voltage_candidates = ['Voltage_per_unit', 'Tensao_pu', 'voltagePerUnit', 'Voltage', 'Tensão', 'Tensao']
     freq_candidates = ['Frequency', 'Frequencia', 'Freq', 'Frequência']
     cumul_candidates = ['Cumulative', 'Cumulativo', 'Acumulado']
@@ -454,6 +455,7 @@ def calcular_estatisticas_do_df(df: pd.DataFrame) -> dict:
                     return cc
         return None
 
+    interval_col = _find(interval_candidates)
     voltage_col = _find(voltage_candidates)
     freq_col = _find(freq_candidates)
     cumul_col = _find(cumul_candidates)
@@ -515,9 +517,20 @@ def calcular_estatisticas_do_df(df: pd.DataFrame) -> dict:
     if x.size == 0 or y.size == 0 or np.sum(y) <= 0:
         raise ValueError("Dados insuficientes após limpeza para calcular estatísticas.")
 
+    unique_x = np.unique(x)
+    positive_diffs = np.diff(unique_x) if unique_x.size > 1 else np.array([])
+    positive_diffs = positive_diffs[positive_diffs > 0]
+    bin_width = None
+    if interval_col is not None and positive_diffs.size > 0:
+        candidate_width = float(np.median(positive_diffs))
+        if np.allclose(positive_diffs, candidate_width, rtol=1e-6, atol=max(1e-12, candidate_width * 1e-6)):
+            bin_width = candidate_width
+            x = x - (candidate_width / 2.0)
+
     total_weight = float(np.sum(y))
     mu = float(np.sum(x * y) / total_weight)
-    var = float(np.sum(y * (x - mu)**2) / total_weight)
+    variance_denominator = total_weight - 1.0 if total_weight > 1.0 else total_weight
+    var = float(np.sum(y * (x - mu)**2) / variance_denominator)
     sigma = float(np.sqrt(var)) if var > 0 else 0.0
 
     cumsum = np.cumsum(y)
@@ -558,7 +571,8 @@ def calcular_estatisticas_do_df(df: pd.DataFrame) -> dict:
         'skewness': skew,
         'kurtosis': kurt,
         'r2': r2,
-        'freq_method': method
+        'freq_method': method,
+        'bin_width': bin_width
     }
     return stats
 

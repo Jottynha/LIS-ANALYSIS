@@ -431,7 +431,7 @@ def save_df_to_excel_only(df: pd.DataFrame, out_path: Path, sheet_name: str = 'D
     
     wb.save(out_path)
     wb.close()
-    print(f"✅ Excel (aba '{sheet_name}') salvo com formatação profissional em: {out_path}")
+    print(f"Excel (aba '{sheet_name}') salvo em: {out_path}")
 
 # ------------------ Calcular estatísticas a partir dos bins (ponderadas) ------------------
 
@@ -768,7 +768,7 @@ def escrever_estatisticas_excel(excel_path: Path, computed_stats: dict,
     
     wb.save(excel_path)
     wb.close()
-    print(f"✅ Estatísticas salvas com formatação profissional na aba '{sheet_name}'")
+    print(f"Estatisticas salvas na aba '{sheet_name}'")
 
 # ------------------ Função do gráfico (lê o Excel gerado) ------------------
 
@@ -1425,7 +1425,7 @@ def save_time_series_to_excel(df: pd.DataFrame, out_path: Path, sheet_name: str 
     
     wb.save(out_path)
     wb.close()
-    print(f"✅ Séries temporais salvas na aba '{sheet_name}' em: {out_path}")
+    print(f"Series temporais salvas na aba '{sheet_name}' em: {out_path}")
 
 
 # ---------- Criar gráfico de séries temporais ----------

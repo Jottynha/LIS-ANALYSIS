@@ -286,11 +286,12 @@ def run_atp_solver(
     lis_path = None
     last_size = None
     last_change_monotonic = None
-    stable_window_sec = 3.0
+    stable_window_running_sec = 3.0
+    stable_window_after_process_sec = 1.0
     process_done = False
     process_done_at_monotonic = None
 
-    def _update_lis_state() -> bool:
+    def _update_lis_state(required_stable_window_sec: float) -> bool:
         nonlocal lis_path, last_size, last_change_monotonic
 
         candidate = None
@@ -320,14 +321,17 @@ def run_atp_solver(
 
         return (
             last_change_monotonic is not None
-            and (time.monotonic() - last_change_monotonic) >= stable_window_sec
+            and (time.monotonic() - last_change_monotonic) >= required_stable_window_sec
         )
 
     try:
         while True:
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
-            lis_stable = _update_lis_state()
+            required_stable_window_sec = (
+                stable_window_after_process_sec if process_done else stable_window_running_sec
+            )
+            lis_stable = _update_lis_state(required_stable_window_sec)
 
             if not process_done:
                 polled = process.poll()

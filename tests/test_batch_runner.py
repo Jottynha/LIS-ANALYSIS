@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 import sys
@@ -189,6 +190,77 @@ class BatchRunnerExecutionTest(unittest.TestCase):
             self.assertEqual(summary.failure_count, 1)
             self.assertEqual(summary.results[1].status, "failed")
             self.assertIn("solver failure for 10", summary.results[1].error or "")
+
+    def test_run_parameter_sweep_parallelizes_isolated_runs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            output_root = root / "out"
+            include_dir = root / "includes"
+            include_dir.mkdir(parents=True, exist_ok=True)
+            (include_dir / "rede.inc").write_text("INCLUDE OK\n", encoding="latin-1", errors="replace")
+            base_atp.write_text(
+                (
+                    "BEGIN NEW DATA CASE\n"
+                    '$INSERT,"includes/rede.inc"\n'
+                    "/BRANCH\n"
+                    "  X0001AX0003A                5.   75.                                         0\n"
+                    "BLANK BRANCH\n"
+                ),
+                encoding="latin-1",
+                errors="replace",
+                newline="",
+            )
+
+            parsed = parse_atp_file(base_atp)
+            branch = next(element for element in parsed if element.get("type") == "branch")
+            parameter = SweepParameterRef(
+                line_index=int(branch["line_index"]),
+                parameter="resistance",
+                element_name="branch",
+            )
+
+            def slow_solver(atp_file_path: str, **_kwargs) -> str:
+                atp_path = Path(atp_file_path)
+                include_copy = atp_path.parent / "includes" / "rede.inc"
+                if not include_copy.exists():
+                    raise FileNotFoundError(f"Include nao copiado para workspace isolado: {include_copy}")
+
+                resistance = self._read_branch_resistance(atp_path)
+                time.sleep(0.25)
+                lis_path = atp_path.with_suffix(".lis")
+                lis_path.write_text(
+                    f"RESISTANCE={resistance}\n",
+                    encoding="latin-1",
+                    errors="replace",
+                )
+                return str(lis_path)
+
+            started = time.monotonic()
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id=parameter,
+                start=5,
+                stop=20,
+                step=5,
+                output_dir=output_root,
+                solver_runner=slow_solver,
+                max_parallel_runs=4,
+            )
+            elapsed = time.monotonic() - started
+
+            self.assertLess(elapsed, 0.9, "Sweep paralelo deveria reduzir o tempo total")
+            self.assertEqual(summary.total_runs, 4)
+            self.assertEqual(summary.success_count, 4)
+            self.assertEqual(summary.failure_count, 0)
+
+            for expected_value, result in zip([5.0, 10.0, 15.0, 20.0], summary.results):
+                self.assertEqual(result.status, "success")
+                self.assertIsNotNone(result.atp_path)
+                self.assertIsNotNone(result.lis_path)
+                self.assertTrue(result.atp_path.exists())
+                self.assertTrue(result.lis_path.exists())
+                self.assertAlmostEqual(self._read_branch_resistance(result.atp_path), expected_value)
 
 
 if __name__ == "__main__":

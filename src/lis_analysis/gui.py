@@ -2125,6 +2125,14 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             try:
                 _ensure_pipeline_imports()
+                cpu_count = os.cpu_count() or 1
+                parallel_runs = 1
+                if self.parallel_process_var.get():
+                    parallel_runs = min(
+                        len(sweep_values),
+                        max(1, min(4, (cpu_count + 1) // 2)),
+                    )
+
                 summary = run_parameter_sweep(
                     base_atp_path=atp_file,
                     parameter_id=parameter_ref,
@@ -2137,6 +2145,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     continue_on_error=not stop_on_error,
                     cancel_event=self._atp_cancel_event,
                     event_callback=event_callback,
+                    max_parallel_runs=parallel_runs,
                 )
                 self.after(0, lambda data=summary: self._on_atp_parameter_sweep_finished(data))
             except Exception as exc:

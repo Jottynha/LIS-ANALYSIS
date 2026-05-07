@@ -14,6 +14,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkinter as tk
 
+from .batch_runner import SweepParameterRef, generate_sweep_values, run_parameter_sweep
 from .solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
 from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from .atp_writer import write_atp_file
@@ -207,10 +208,22 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_timeout_sec = 600
         self._atp_progress_value = 0.0
         self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
+        self._atp_cancel_event = threading.Event()
+        self._atp_active_mode = None
+        self._atp_runtime_status_text = "Aguardando execucao"
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
         self.atp_param_status_var = tk.StringVar(value="Nenhum parametro carregado")
+        self.atp_sweep_parameter_var = tk.StringVar(value="")
+        self.atp_sweep_start_var = tk.StringVar(value="")
+        self.atp_sweep_stop_var = tk.StringVar(value="")
+        self.atp_sweep_step_var = tk.StringVar(value="")
+        self.atp_sweep_parse_lis_var = tk.BooleanVar(value=True)
+        self.atp_sweep_stop_on_error_var = tk.BooleanVar(value=False)
+        self.atp_batch_progress_var = tk.StringVar(value="0 / 0")
+        self.atp_batch_elapsed_var = tk.StringVar(value="0s")
+        self.atp_batch_status_var = tk.StringVar(value="Aguardando")
         self._atp_elements_cache = []
         self._atp_original_lines_cache = []
         self._atp_source_signature = None
@@ -232,6 +245,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._sim_params_card = None
         self._sim_action_card = None
         self._simulation_scroll_frame = None
+        self._atp_sweep_parameter_options = {}
+        self.atp_sweep_parameter_menu = None
+        self.atp_sweep_run_button = None
+        self.atp_cancel_button = None
         self._atp_scroll_isolation_bound = False
         self._atp_scroll_targets = ()
         self._atp_scroll_step_units = 10
@@ -671,6 +688,60 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._setup_atp_params_scroll_isolation()
 
+        sweep_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        sweep_card.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            sweep_card,
+            text="Execucao em lote (parameter sweep)",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        ctk.CTkLabel(
+            sweep_card,
+            text="Escolha um parametro editavel e defina inicio, fim e passo para executar varias simulacoes automaticamente.",
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        sweep_grid = ctk.CTkFrame(sweep_card, fg_color="transparent")
+        sweep_grid.pack(fill="x", padx=15, pady=(0, 10))
+        sweep_grid.grid_columnconfigure(1, weight=1)
+        sweep_grid.grid_columnconfigure(3, weight=1)
+
+        ctk.CTkLabel(sweep_grid, text="Parametro do sweep:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        self.atp_sweep_parameter_menu = ctk.CTkOptionMenu(
+            sweep_grid,
+            values=["Nenhum parametro carregado"],
+            variable=self.atp_sweep_parameter_var,
+            command=self._on_atp_sweep_parameter_selected,
+            width=520,
+        )
+        self.atp_sweep_parameter_menu.grid(row=0, column=1, columnspan=3, sticky="ew", pady=6)
+
+        ctk.CTkLabel(sweep_grid, text="Inicio:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        ctk.CTkEntry(sweep_grid, textvariable=self.atp_sweep_start_var, width=160).grid(row=1, column=1, sticky="ew", pady=6)
+
+        ctk.CTkLabel(sweep_grid, text="Fim:").grid(row=1, column=2, sticky="w", padx=(18, 10), pady=6)
+        ctk.CTkEntry(sweep_grid, textvariable=self.atp_sweep_stop_var, width=160).grid(row=1, column=3, sticky="ew", pady=6)
+
+        ctk.CTkLabel(sweep_grid, text="Passo:").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=6)
+        ctk.CTkEntry(sweep_grid, textvariable=self.atp_sweep_step_var, width=160).grid(row=2, column=1, sticky="ew", pady=6)
+
+        sweep_options = ctk.CTkFrame(sweep_card, fg_color="transparent")
+        sweep_options.pack(fill="x", padx=15, pady=(0, 15))
+
+        ctk.CTkCheckBox(
+            sweep_options,
+            text="Pos-processar .lis de cada execucao",
+            variable=self.atp_sweep_parse_lis_var,
+        ).pack(side="left")
+
+        ctk.CTkCheckBox(
+            sweep_options,
+            text="Parar no primeiro erro",
+            variable=self.atp_sweep_stop_on_error_var,
+        ).pack(side="left", padx=(18, 0))
+
         action_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         action_card.pack(fill="x", pady=(0, 15))
         self._sim_action_card = action_card
@@ -695,6 +766,41 @@ class ModernLisAnalysisApp(ctk.CTk):
             hover_color="#1976D2"
         )
         self.atp_run_button.pack(side="left", padx=5)
+
+        self.atp_sweep_run_button = ctk.CTkButton(
+            buttons_frame,
+            text="Run Parameter Sweep",
+            command=self._run_atp_parameter_sweep,
+            width=220,
+            height=40,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#2E7D32",
+            hover_color="#1B5E20"
+        )
+        self.atp_sweep_run_button.pack(side="left", padx=5)
+
+        self.atp_cancel_button = ctk.CTkButton(
+            buttons_frame,
+            text="Cancelar",
+            command=self._cancel_atp_execution,
+            width=140,
+            height=40,
+            state="disabled",
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#C62828",
+            hover_color="#8E0000"
+        )
+        self.atp_cancel_button.pack(side="left", padx=5)
+
+        metrics_frame = ctk.CTkFrame(action_card, fg_color="transparent")
+        metrics_frame.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(metrics_frame, text="Progresso:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        ctk.CTkLabel(metrics_frame, textvariable=self.atp_batch_progress_var).pack(side="left", padx=(6, 18))
+        ctk.CTkLabel(metrics_frame, text="Tempo:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        ctk.CTkLabel(metrics_frame, textvariable=self.atp_batch_elapsed_var).pack(side="left", padx=(6, 18))
+        ctk.CTkLabel(metrics_frame, text="Status atual:", font=ctk.CTkFont(size=12, weight="bold")).pack(side="left")
+        ctk.CTkLabel(metrics_frame, textvariable=self.atp_batch_status_var).pack(side="left", padx=(6, 0))
 
         self.atp_progress = ctk.CTkProgressBar(action_card)
         self.atp_progress.pack(fill="x", padx=15, pady=(0, 8))
@@ -843,6 +949,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_section_widgets = {}
         self._atp_filter_no_results_label = None
         self.atp_param_status_var.set("Nenhum parametro carregado")
+        self._refresh_atp_sweep_parameter_menu()
 
         if self.atp_params_scroll_frame is None:
             return
@@ -1404,6 +1511,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         if not editable:
             self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            self._refresh_atp_sweep_parameter_menu()
             if self.atp_params_scroll_frame is not None:
                 ctk.CTkLabel(
                     self.atp_params_scroll_frame,
@@ -1556,6 +1664,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     row_data = {
                         "line_index": line_index,
                         "name": f"Linha {element_id}",
+                        "element_name": etype,
                         "parameter": param_name,
                         "editable": True,
                         "original_value": original_value,
@@ -1609,6 +1718,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._refresh_atp_param_status()
         self._apply_atp_parameter_filter()
+        self._refresh_atp_sweep_parameter_menu()
         self.log(
             f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
         )
@@ -1664,6 +1774,375 @@ class ModernLisAnalysisApp(ctk.CTk):
             raise ValueError(f"Valores invalidos no editor de parametros ATP:\n{details}")
 
         return overrides
+
+    def _build_atp_sweep_option_label(self, row: dict) -> str:
+        line_number = int(row.get("line_index", -1)) + 1
+        return (
+            f"Linha {line_number} | {row.get('name', 'Elemento')} | "
+            f"{self._friendly_atp_param_label(str(row.get('parameter', '')))}"
+        )
+
+    def _refresh_atp_sweep_parameter_menu(self):
+        rows = [row for row in self._atp_param_rows if bool(row.get("editable", True))]
+        self._atp_sweep_parameter_options = {}
+
+        if self.atp_sweep_parameter_menu is None:
+            return
+
+        if not rows:
+            placeholder = "Nenhum parametro carregado"
+            self.atp_sweep_parameter_menu.configure(values=[placeholder], state="disabled")
+            self.atp_sweep_parameter_var.set(placeholder)
+            return
+
+        values = []
+        for row in rows:
+            label = self._build_atp_sweep_option_label(row)
+            values.append(label)
+            self._atp_sweep_parameter_options[label] = row
+
+        current = self.atp_sweep_parameter_var.get().strip()
+        if current not in self._atp_sweep_parameter_options:
+            current = values[0]
+
+        self.atp_sweep_parameter_menu.configure(values=values, state="normal")
+        self.atp_sweep_parameter_var.set(current)
+        self._on_atp_sweep_parameter_selected(current)
+
+    def _on_atp_sweep_parameter_selected(self, _selected: str | None = None):
+        row = self._atp_sweep_parameter_options.get(self.atp_sweep_parameter_var.get().strip())
+        if row is None:
+            return
+
+        self.atp_sweep_start_var.set(
+            self._format_param_value(float(row["original_value"]), keep_trailing_dot=row["keep_trailing_dot"])
+        )
+        self.atp_sweep_stop_var.set(
+            self._format_param_value(float(row["original_value"]), keep_trailing_dot=row["keep_trailing_dot"])
+        )
+        self.atp_sweep_step_var.set(self._format_param_value(float(row["step"])))
+
+    def _parse_float_field(self, raw_value: str, field_name: str) -> float:
+        raw = raw_value.strip()
+        if not raw:
+            raise ValueError(f"{field_name} nao informado")
+
+        normalized = raw.replace("D", "E").replace("d", "e")
+        try:
+            return float(normalized)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} invalido: {raw_value}") from exc
+
+    def _postprocess_atp_sweep_lis(
+        self,
+        lis_path: Path,
+        run_dir: Path,
+        *,
+        plot_options: dict,
+        show_plots: bool,
+        hide_errors: bool,
+        only_comparative: bool,
+        report_progress=None,
+    ) -> dict[str, str | None]:
+        parsed = parse_lis_once(lis_path, verbose=False)
+        df, _stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
+        excel_path = None
+        table_warning = None
+
+        if df is None:
+            table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
+            if report_progress is not None:
+                report_progress(f"Aviso: {table_warning}")
+        else:
+            excel_path = run_dir / f"{lis_path.stem}.xlsx"
+            save_df_to_excel_only(df, excel_path)
+
+            try:
+                computed_stats = calcular_estatisticas_do_df(df)
+                escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
+            except Exception as exc:
+                if not hide_errors and report_progress is not None:
+                    report_progress(f"Aviso: falha em estatisticas: {exc}")
+
+            if not only_comparative:
+                graph_name = f"grafico_{lis_path.stem}.png"
+                self._criar_grafico_customizado(
+                    excel_path,
+                    run_dir,
+                    graph_name,
+                    plot_options,
+                    mostrar=show_plots,
+                )
+
+        try:
+            time_series_df = parsed.time_series_df
+            if time_series_df is not None:
+                if excel_path is None:
+                    excel_path = run_dir / f"{lis_path.stem}.xlsx"
+                save_time_series_to_excel(time_series_df, excel_path)
+                criar_grafico_series_temporais(
+                    time_series_df,
+                    run_dir / f"series_temporais_{lis_path.stem}.png",
+                    lis_name=lis_path.name,
+                    mostrar=show_plots,
+                )
+        except Exception as exc:
+            if not hide_errors and report_progress is not None:
+                report_progress(f"Aviso: falha em series temporais: {exc}")
+
+        return {
+            "excel_path": str(excel_path) if excel_path else None,
+            "table_warning": table_warning,
+        }
+
+    def _cancel_atp_execution(self):
+        if not self._atp_running or self._atp_active_mode != "batch":
+            self._show_info("Execucao ATP", "Nao existe sweep em lote em andamento para cancelar.")
+            return
+
+        self._atp_cancel_event.set()
+        self.atp_batch_status_var.set("Cancelamento solicitado")
+        self._atp_runtime_status_text = "Cancelamento solicitado"
+        self.atp_run_status_var.set("Status: cancelamento solicitado")
+        self.log("[ATP-SWEEP] Cancelamento solicitado pelo usuario")
+
+    def _on_atp_sweep_event(self, event: dict):
+        message = str(event.get("message", "")).strip()
+        if message:
+            self.log(f"[ATP-SWEEP] {message}")
+            self.atp_batch_status_var.set(message)
+            self._atp_runtime_status_text = message
+
+        total_runs = int(event.get("total_runs", 0) or 0)
+        run_index = int(event.get("run_index", 0) or 0)
+        if total_runs:
+            self.atp_batch_progress_var.set(f"{min(run_index, total_runs)} / {total_runs}")
+
+        progress = event.get("progress")
+        if progress is not None:
+            self._set_atp_progress(float(progress))
+
+    def _format_atp_sweep_summary(self, summary) -> str:
+        lines = [
+            f"Sweep finalizado em {summary.elapsed_seconds:.1f}s",
+            f"Parametro: {summary.parameter.display_label}",
+            f"Pasta de saida: {summary.output_dir}",
+            (
+                f"Total: {summary.total_runs} | Sucessos: {summary.success_count} | "
+                f"Falhas: {summary.failure_count} | Canceladas: {summary.cancelled_count}"
+            ),
+        ]
+
+        if summary.cancelled:
+            lines.append("Execucao interrompida por cancelamento do usuario.")
+        if summary.stopped_on_error:
+            lines.append("Execucao interrompida no primeiro erro, conforme configurado.")
+
+        lines.append("")
+        for result in summary.results:
+            line = f"{result.run_index:03d} | valor={result.value:g} | {result.status.upper()}"
+            if result.lis_path:
+                line += f" | LIS={result.lis_path}"
+            if result.error:
+                line += f" | erro={result.error}"
+            lines.append(line)
+
+        return "\n".join(lines)
+
+    def _on_atp_parameter_sweep_finished(self, summary):
+        final_progress = min(1.0, len(summary.results) / max(1, summary.total_runs))
+        completed_all = (
+            not summary.cancelled
+            and not summary.stopped_on_error
+            and len(summary.results) == summary.total_runs
+        )
+        elapsed = self._set_atp_feedback_finished(success=completed_all, final_progress=final_progress)
+        summary_text = self._format_atp_sweep_summary(summary)
+        self._update_simulation_results(summary_text)
+
+        if summary.cancelled:
+            self.status_var.set("Sweep cancelado")
+            self.atp_batch_status_var.set("Sweep cancelado")
+            self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
+        elif summary.failure_count > 0:
+            self.status_var.set("Sweep concluido com falhas")
+            self.atp_batch_status_var.set("Sweep concluido com falhas")
+            self.atp_run_status_var.set(f"Status: concluido com falhas ({elapsed:.1f}s)")
+        else:
+            self.status_var.set("Sweep concluido")
+            self.atp_batch_status_var.set("Sweep concluido")
+            self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
+
+        self.log(
+            f"[ATP-SWEEP] Resumo final: {summary.success_count} sucesso(s), "
+            f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s)"
+        )
+
+        if self.save_logs_var.get():
+            try:
+                log_file = summary.output_dir / f"log_sweep_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+                log_content = self.log_textbox.get("1.0", "end")
+                log_file.write_text(log_content, encoding="utf-8")
+                self.log(f"[ATP-SWEEP] Log salvo: {log_file.name}")
+            except Exception as exc:
+                self.log(f"[ATP-SWEEP] Aviso: nao foi possivel salvar log do sweep: {exc}")
+
+        if self.open_output_var.get():
+            _open_in_file_manager(summary.output_dir)
+
+        if summary.cancelled:
+            self._show_warning(
+                "Sweep cancelado",
+                f"O sweep foi interrompido apos {len(summary.results)} execucao(oes).",
+                details=[("Resultados", str(summary.output_dir))],
+            )
+        elif summary.failure_count > 0:
+            self._show_warning(
+                "Sweep concluido com falhas",
+                (
+                    f"{summary.success_count} execucao(oes) concluida(s) e "
+                    f"{summary.failure_count} falha(s)."
+                ),
+                details=[("Resultados", str(summary.output_dir))],
+            )
+        else:
+            self._show_success(
+                "Sweep concluido",
+                f"{summary.success_count} execucao(oes) concluida(s) com sucesso.",
+                details=[("Resultados", str(summary.output_dir))],
+            )
+
+    def _run_atp_parameter_sweep(self):
+        if self._atp_running:
+            self._show_info("Execucao ATP", "Ja existe uma execucao ATP em andamento.")
+            return
+
+        atp_file = self.atp_file_var.get().strip()
+        if not atp_file or not Path(atp_file).exists():
+            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            return
+
+        if not self._atp_param_rows:
+            self._load_atp_parameters(show_dialog_errors=True)
+            if not self._atp_param_rows:
+                return
+
+        selected_label = self.atp_sweep_parameter_var.get().strip()
+        selected_row = self._atp_sweep_parameter_options.get(selected_label)
+        if selected_row is None:
+            self._show_error("Erro", "Selecione um parametro valido para o sweep.")
+            return
+
+        missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
+        if missing_insert_dependencies:
+            details = [("Arquivo ATP", atp_file)]
+            for line_no, target in missing_insert_dependencies[:10]:
+                details.append((f"Linha {line_no}", target))
+            self._show_error(
+                "Dependencias ATP ausentes",
+                "Nao e possivel iniciar o sweep. Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s).",
+                details=details,
+            )
+            return
+
+        outdir_str = self.outdir_var.get().strip()
+        if not outdir_str:
+            self._show_error("Erro", "Pasta de saida nao informada.")
+            return
+
+        try:
+            pending_overrides = self._collect_atp_parameter_overrides()
+        except Exception as exc:
+            self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(exc))])
+            return
+
+        if pending_overrides:
+            confirm = messagebox.askyesno(
+                "Ignorar alteracoes manuais",
+                (
+                    "A execucao em lote altera somente o parametro selecionado para o sweep.\n\n"
+                    "As alteracoes manuais pendentes no editor ATP serao ignoradas nesta execucao.\n\n"
+                    "Deseja continuar?"
+                ),
+            )
+            if not confirm:
+                return
+
+        try:
+            start = self._parse_float_field(self.atp_sweep_start_var.get(), "Inicio")
+            stop = self._parse_float_field(self.atp_sweep_stop_var.get(), "Fim")
+            step = self._parse_float_field(self.atp_sweep_step_var.get(), "Passo")
+            sweep_values = generate_sweep_values(start, stop, step)
+        except Exception as exc:
+            self._show_error("Erro", "Configuracao invalida para o sweep.", details=[("Detalhes", str(exc))])
+            return
+
+        show_plots = self.show_plots_var.get()
+        hide_errors = self.hide_errors_var.get()
+        only_comparative = self.only_comparative_var.get()
+        parse_each_lis = self.atp_sweep_parse_lis_var.get()
+        stop_on_error = self.atp_sweep_stop_on_error_var.get()
+        plot_options = {
+            'show_bars': self.plot_bars_var.get(),
+            'show_points': self.plot_points_var.get(),
+            'show_gaussian': self.plot_gaussian_var.get(),
+            'show_cumulative': self.plot_cumulative_var.get(),
+            'show_stats_box': self.plot_stats_box_var.get(),
+        }
+
+        self._atp_cancel_event.clear()
+        self.atp_batch_progress_var.set(f"0 / {len(sweep_values)}")
+        self.atp_batch_elapsed_var.set("0s")
+        self.atp_batch_status_var.set("Preparando sweep")
+        self._set_atp_feedback_running(mode="batch", total_runs=len(sweep_values))
+        self.status_var.set("Executando sweep ATP...")
+        self._update_simulation_results("Executando sweep ATP em background... aguarde.\n")
+
+        parameter_ref = SweepParameterRef(
+            line_index=int(selected_row["line_index"]),
+            parameter=str(selected_row["parameter"]),
+            element_name=str(selected_row.get("element_name", "element")),
+            label=selected_label,
+        )
+
+        def worker():
+            def report_progress(message: str):
+                self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
+
+            def event_callback(event: dict):
+                self.after(0, lambda payload=event: self._on_atp_sweep_event(payload))
+
+            def lis_parser(lis_path: Path, run_dir: Path, _value: float, _idx: int, _total: int):
+                return self._postprocess_atp_sweep_lis(
+                    lis_path,
+                    run_dir,
+                    plot_options=plot_options,
+                    show_plots=show_plots,
+                    hide_errors=hide_errors,
+                    only_comparative=only_comparative,
+                    report_progress=report_progress,
+                )
+
+            try:
+                _ensure_pipeline_imports()
+                summary = run_parameter_sweep(
+                    base_atp_path=atp_file,
+                    parameter_id=parameter_ref,
+                    start=start,
+                    stop=stop,
+                    step=step,
+                    output_dir=Path(outdir_str) / "batch_runs",
+                    lis_parser=lis_parser if parse_each_lis else None,
+                    solver_timeout=self._atp_timeout_sec,
+                    continue_on_error=not stop_on_error,
+                    cancel_event=self._atp_cancel_event,
+                    event_callback=event_callback,
+                )
+                self.after(0, lambda data=summary: self._on_atp_parameter_sweep_finished(data))
+            except Exception as exc:
+                self.after(0, lambda msg=str(exc): self._on_atp_simulation_finished(False, msg))
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _export_atp_parameters_txt(self):
         """Exporta para TXT todos os parametros ATP detectados para conferência manual."""
@@ -2091,7 +2570,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.log("[ATP] Execucao cancelada pelo usuario no preview de alteracoes")
             return
 
-        self._set_atp_feedback_running()
+        self._set_atp_feedback_running(mode="single", total_runs=1)
         self.status_var.set("Executando simulacao ATP...")
         self.log(f"Iniciando simulacao ATP para: {atp_file}")
         self._update_simulation_results("Executando simulacao ATP e pos-processamento... aguarde.\n")
@@ -2259,6 +2738,8 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _on_atp_progress_message(self, message: str):
         """Recebe mensagens de progresso do runner ATP no thread principal."""
         self.log(f"[ATP] {message}")
+        self.atp_batch_status_var.set(message)
+        self._atp_runtime_status_text = message
 
         text = message.lower()
         if "process started" in text:
@@ -2280,6 +2761,8 @@ class ModernLisAnalysisApp(ctk.CTk):
             overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
             table_warning = payload.get("table_warning") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
+            self.atp_batch_progress_var.set("1 / 1")
+            self.atp_batch_status_var.set("Simulacao concluida")
             self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
             if outdir:
                 self.log(f"Resultados da analise salvos em: {outdir}")
@@ -2315,6 +2798,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         else:
             self.status_var.set("Pronto")
             error_msg = str(payload)
+            self.atp_batch_progress_var.set("0 / 1")
+            self.atp_batch_status_var.set("Erro na simulacao")
             details = [("Detalhes", error_msg)]
 
             marker = "Trecho do LIS:"
@@ -2335,20 +2820,30 @@ class ModernLisAnalysisApp(ctk.CTk):
                 details=details,
             )
 
-    def _set_atp_feedback_running(self):
+    def _set_atp_feedback_running(self, mode: str = "single", total_runs: int = 1):
         """Ativa indicadores visuais de simulacao ATP em andamento."""
         # Reset explicito para nova simulacao (evita manter 100% da execucao anterior).
         self._atp_running = False
         self._set_atp_progress(0.0)
 
         self._atp_running = True
+        self._atp_active_mode = mode
         self._atp_started_at = time.time()
+        self._atp_runtime_status_text = "Executando"
+        self._atp_cancel_event.clear()
         self._set_atp_progress(0.0)
         self.atp_run_button.configure(state="disabled", text="Executando...")
+        if self.atp_sweep_run_button is not None:
+            self.atp_sweep_run_button.configure(state="disabled", text="Executando...")
+        if self.atp_cancel_button is not None:
+            self.atp_cancel_button.configure(state="normal" if mode == "batch" else "disabled")
+        self.atp_batch_progress_var.set(f"0 / {max(1, int(total_runs))}")
+        self.atp_batch_elapsed_var.set("0s")
+        self.atp_batch_status_var.set("Executando")
         self.atp_run_status_var.set("Status: executando (0s)")
         self.after(1000, self._tick_atp_running_status)
 
-    def _set_atp_feedback_finished(self, success: bool) -> float:
+    def _set_atp_feedback_finished(self, success: bool, final_progress: float | None = None) -> float:
         """Desativa indicadores visuais e retorna tempo decorrido."""
         elapsed = 0.0
         if self._atp_started_at is not None:
@@ -2356,11 +2851,17 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._atp_running = False
         self._atp_started_at = None
-        if success:
-            self._set_atp_progress(1.0)
-        else:
-            self._set_atp_progress(0.0)
+        self._atp_active_mode = None
+        target_progress = final_progress
+        if target_progress is None:
+            target_progress = 1.0 if success else 0.0
+        self._set_atp_progress(target_progress)
         self.atp_run_button.configure(state="normal", text="Run Simulation")
+        if self.atp_sweep_run_button is not None:
+            self.atp_sweep_run_button.configure(state="normal", text="Run Parameter Sweep")
+        if self.atp_cancel_button is not None:
+            self.atp_cancel_button.configure(state="disabled")
+        self.atp_batch_elapsed_var.set(f"{elapsed:.1f}s")
 
         if success:
             self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
@@ -2376,12 +2877,14 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         elapsed_float = time.time() - self._atp_started_at
         elapsed = int(elapsed_float)
+        self.atp_batch_elapsed_var.set(f"{elapsed}s")
         # Inicia do zero e acelera de forma suave apos o primeiro segundo.
         base_elapsed = max(0.0, elapsed_float - 1.0)
         timed_progress = 0.80 * (1.0 - math.exp(-base_elapsed / 45.0))
         timed_progress = min(0.85, timed_progress)
         self._set_atp_progress(timed_progress)
-        self.atp_run_status_var.set(f"Status: executando ({elapsed}s)")
+        status_text = self._atp_runtime_status_text or "executando"
+        self.atp_run_status_var.set(f"Status: {status_text} ({elapsed}s)")
         self.after(1000, self._tick_atp_running_status)
 
     def _set_atp_progress(self, value: float):

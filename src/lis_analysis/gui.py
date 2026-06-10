@@ -9,6 +9,7 @@ import time
 import math
 from datetime import datetime
 from pathlib import Path
+from scipy import stats
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -48,6 +49,47 @@ plt = None
 np = None
 _plot_import_lock = threading.Lock()
 
+from math import exp, sqrt, erf
+def calcular_risco(H, D, S, N, d, n, V50, sigma_s):
+
+    # kg
+    kg = (
+        1.25
+        + 0.005 * ((H / D) - 6)
+        + 0.25 * (exp(-8 * S / D) - 0.2)
+        - 0.007 * (D - 5)
+        + 0.01 * (N - 2)
+    )
+
+    # CFO
+    cfo = kg * (3400 / (1 + 8 / d))
+
+    # sigma_f = 6% do CFO
+    sigma_f = 0.06 * cfo
+
+    # CFO corrigido
+    cfo_n = cfo * (
+        1 - 4 * sigma_f / cfo *
+        (1 - 1 / (n ** (1/5)))
+    )
+
+    # sigma corrigido
+    sigma_fn = sigma_f / (n ** (1/5))
+
+    # Z
+    z = (
+        (cfo_n - V50)
+        /
+        sqrt(sigma_fn**2 + sigma_s**2)
+    )
+
+    # CDF Normal
+    Fz = 0.5 * (1 + erf(z / sqrt(2)))
+
+    # risco
+    risco = 0.5 * (1 - Fz)
+
+    return risco
 
 def _ensure_pipeline_imports():
     global _pipeline_imported
@@ -193,6 +235,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._log_max_lines = 3000
         self._log_trim_every = 20
         self._log_entries_since_trim = 0
+        self.height_var = tk.DoubleVar(value=10)  # valor padrão: 10
+        self.distance_var = tk.DoubleVar(value=20)  # valo`r padrão: 20
+        self.width_var = tk.DoubleVar(value=5)  # valor padrão: 5
+        self.subconductors_var = tk.DoubleVar(value=3)  # valor padrão: 3
+        self.chain_length_var = tk.DoubleVar(value=2)  # valor padrão: 2
+        self.gaps_var = tk.DoubleVar(value=4)  # valor padrão: 4
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -495,7 +543,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var).pack(anchor="w", pady=5)
-        
+
         # Card: Índice Inicial
         index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         index_card.pack(fill="x", pady=(0, 15))
@@ -506,6 +554,57 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
         
+        # Card: Configurações Avançadas
+        index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        index_card.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            index_card, 
+            text="Configurações Avançadas",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        index_frame = ctk.CTkFrame(index_card, fg_color="transparent")
+        index_frame.pack(anchor="w", padx=15, pady=(0, 15))
+
+        # H: Height of the driver (m)
+        self.height_var = tk.DoubleVar(value=10)  # valor padrão: 10
+        ctk.CTkLabel(index_frame, text="Altura do motorista (m):").grid(row=0, column=0, padx=(0, 10))
+        self.height_entry = ctk.CTkEntry(index_frame, textvariable=self.height_var, width=80)
+        self.height_entry.grid(row=0, column=1, sticky="w")
+
+        # D: Distance between the driver and the tower (m)
+        self.distance_var = tk.DoubleVar(value=20)  # valor padrão: 20
+        ctk.CTkLabel(index_frame, text="Distância entre o motorista e a torre (m):").grid(row=1, column=0, padx=(0, 10))
+        self.distance_entry = ctk.CTkEntry(index_frame, textvariable=self.distance_var, width=80)
+        self.distance_entry.grid(row=1, column=1, sticky="w")
+
+        # S: Width of the tower (m)
+        self.width_var = tk.DoubleVar(value=5)  # valor padrão: 5
+        ctk.CTkLabel(index_frame, text="Largura da torre (m):").grid(row=2, column=0, padx=(0, 10))
+        self.width_entry = ctk.CTkEntry(index_frame, textvariable=self.width_var, width=80)
+        self.width_entry.grid(row=2, column=1, sticky="w")
+
+        # N: Number of subconductors
+        self.subconductors_var = tk.DoubleVar(value=3)  # valor padrão: 3
+        ctk.CTkLabel(index_frame, text="Número de subcondutores:").grid(row=3, column=0, padx=(0, 10))
+        self.subconductors_entry = ctk.CTkEntry(index_frame, textvariable=self.subconductors_var, width=80)
+        self.subconductors_entry.grid(row=3, column=1, sticky="w")
+
+        # d: Length of the insulator chain (m)
+        self.chain_length_var = tk.DoubleVar(value=2)  # valor padrão: 2
+        ctk.CTkLabel(index_frame, text="Comprimento da cadeia de isoladores (m):").grid(row=5, column=0, padx=(0, 11))
+        self.chain_length_entry = ctk.CTkEntry(index_frame, textvariable=self.chain_length_var, width=80)
+        self.chain_length_entry.grid(row=5, column=1, sticky="w")
+
+        # n: Number of gaps in parallel
+        self.gaps_var = tk.DoubleVar(value=4)  # valor padrão: 4
+        ctk.CTkLabel(index_frame, text="Número de furos paralelos:").grid(row=6, column=0, padx=(0, 12))
+        self.gaps_entry = ctk.CTkEntry(index_frame, textvariable=self.gaps_var, width=80)
+        self.gaps_entry.grid(row=6, column=1, sticky="w")
+
+
+
         index_frame = ctk.CTkFrame(index_card, fg_color="transparent")
         index_frame.pack(anchor="w", padx=15, pady=(0, 15))
         
@@ -3201,10 +3300,27 @@ class ModernLisAnalysisApp(ctk.CTk):
                 return
             
             x, y, mu, sigma = res
+
+            # calculando risco de falha  
+            H = float(self.height_var.get())
+            D = float(self.distance_var.get())
+            S = float(self.width_var.get())
+            N = float(self.subconductors_var.get())
+            d = float(self.chain_length_var.get())
+            n = float(self.gaps_var.get())
+            V50 = mu
+            sigma_s = sigma
+            print(f"Calculando risco com: H={H}, D={D}, S={S}, N={N}, d={d}, n={n}, V50={V50}, sigma_s={sigma_s}")
+            # Calculate the risk
+            risk = calcular_risco(H, D, S, N, d, n, V50, sigma_s)
+            print("Risco calculado:", risk)
+
+
             
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
-            
+            ax.text(0.5, 0.9, f'Risco: {risk}', ha='center', transform=ax.transAxes)
+
             # Barras de frequência
             if plot_options.get('show_bars', True):
                 unique_x = np.unique(x)

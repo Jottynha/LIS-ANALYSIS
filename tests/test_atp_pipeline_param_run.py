@@ -5,11 +5,14 @@ import threading
 import time
 import unittest
 from pathlib import Path
+import sys
 from unittest.mock import patch
 
-from atp_parser import parse_atp_file, update_parameter
-from atp_writer import write_atp_file
-from solver.atp_runner import run_atp_solver
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from lis_analysis.atp_parser import parse_atp_file, update_parameter
+from lis_analysis.atp_writer import write_atp_file
+from lis_analysis.solver.atp_runner import run_atp_solver
 
 
 class _FakeStdin:
@@ -43,6 +46,7 @@ def _make_fake_popen_class(
     lis_name: str,
     lis_content: str,
     finish_after_sec: float = 1.0,
+    lis_emit_delay_sec: float = 0.2,
 ):
     class FakePopen:
         def __init__(self, command, cwd=None, **_kwargs):
@@ -56,7 +60,7 @@ def _make_fake_popen_class(
             self._killed = False
 
             def _emit_lis() -> None:
-                time.sleep(0.2)
+                time.sleep(lis_emit_delay_sec)
                 target = self.cwd / lis_name
                 target.write_text(lis_content, encoding="latin-1", errors="replace")
 
@@ -133,7 +137,7 @@ class ATPPipelineParamRunTest(unittest.TestCase):
                 lis_content="LIS OK\n",
             )
 
-            with patch("solver.atp_runner.subprocess.Popen", new=fake_popen):
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
                 started = time.monotonic()
                 lis_path = run_atp_solver(str(parametrized), timeout=30)
                 elapsed = time.monotonic() - started
@@ -162,13 +166,40 @@ class ATPPipelineParamRunTest(unittest.TestCase):
                 lis_content=kill_lis,
             )
 
-            with patch("solver.atp_runner.subprocess.Popen", new=fake_popen):
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
                 with self.assertRaises(RuntimeError) as ctx:
                     run_atp_solver(str(parametrized), timeout=30)
 
             message = str(ctx.exception)
             self.assertIn("KILL", message)
             self.assertIn("Trecho do LIS", message)
+
+    def test_param_run_returns_quickly_after_process_finishes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            original = tmp / "caso.atp"
+            parametrized = tmp / "caso__param.atp"
+            self._create_base_atp(original)
+            self._create_parametrized_atp(original, parametrized)
+
+            fake_popen = _make_fake_popen_class(
+                lis_name="resultado_rapido.lis",
+                lis_content="LIS OK\n",
+                finish_after_sec=0.2,
+                lis_emit_delay_sec=0.05,
+            )
+
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
+                started = time.monotonic()
+                lis_path = run_atp_solver(str(parametrized), timeout=30)
+                elapsed = time.monotonic() - started
+
+            self.assertTrue(Path(lis_path).exists())
+            self.assertLess(
+                elapsed,
+                2.5,
+                "Runner deveria encerrar logo apos o processo finalizar e o LIS estabilizar",
+            )
 
 
 if __name__ == "__main__":

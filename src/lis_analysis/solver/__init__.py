@@ -1,0 +1,1 @@
+"""Integrações de solver ATP."""

@@ -10,6 +10,15 @@ from typing import Callable, Optional
 ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
 
 
+def _adaptive_poll_interval(idle_seconds: float) -> float:
+    """Define o intervalo de polling com backoff progressivo em periodos ociosos."""
+    if idle_seconds < 2.0:
+        return 0.05
+    if idle_seconds < 8.0:
+        return 0.2
+    return 0.5
+
+
 def _extract_lis_error_excerpt(text: str, context_lines: int = 8) -> str:
     """Extrai um trecho curto ao redor de mensagens de erro criticas no LIS."""
     lines = text.splitlines()
@@ -277,11 +286,12 @@ def run_atp_solver(
     lis_path = None
     last_size = None
     last_change_monotonic = None
-    stable_window_sec = 3.0
+    stable_window_running_sec = 3.0
+    stable_window_after_process_sec = 1.0
     process_done = False
     process_done_at_monotonic = None
 
-    def _update_lis_state() -> bool:
+    def _update_lis_state(required_stable_window_sec: float) -> bool:
         nonlocal lis_path, last_size, last_change_monotonic
 
         candidate = None
@@ -311,14 +321,17 @@ def run_atp_solver(
 
         return (
             last_change_monotonic is not None
-            and (time.monotonic() - last_change_monotonic) >= stable_window_sec
+            and (time.monotonic() - last_change_monotonic) >= required_stable_window_sec
         )
 
     try:
         while True:
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
-            lis_stable = _update_lis_state()
+            required_stable_window_sec = (
+                stable_window_after_process_sec if process_done else stable_window_running_sec
+            )
+            lis_stable = _update_lis_state(required_stable_window_sec)
 
             if not process_done:
                 polled = process.poll()
@@ -383,7 +396,20 @@ def run_atp_solver(
             ):
                 break
 
-            time.sleep(0.2)
+            last_activity_monotonic = last_output_monotonic
+            if last_change_monotonic is not None:
+                last_activity_monotonic = max(last_activity_monotonic, last_change_monotonic)
+            if process_done_at_monotonic is not None:
+                last_activity_monotonic = max(last_activity_monotonic, process_done_at_monotonic)
+
+            idle_for = max(0.0, now_monotonic - last_activity_monotonic)
+            poll_interval = _adaptive_poll_interval(idle_for)
+
+            remaining_timeout = max(0.0, float(timeout) - elapsed_total)
+            if remaining_timeout > 0:
+                poll_interval = min(poll_interval, max(0.01, remaining_timeout))
+
+            time.sleep(poll_interval)
     finally:
         try:
             if process.stdin is not None:

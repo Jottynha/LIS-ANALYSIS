@@ -15,7 +15,14 @@ Estrutura útil no repositório
 - `scripts/build_linux.sh` — cria um ambiente isolado e gera o executável no Linux.
 - `scripts/build_windows.bat` — gera o executável no Windows.
 - `scripts/run_gui.bat` — helper que executa o `.exe` com console aberto (útil para ver erros ao testar no Windows).
+- `run.py` — launcher local simples para executar a aplicação sem configurar `PYTHONPATH` manualmente.
 - Resultado da build: `dist/LIS-ANALYSIS/` contendo o binário `LIS-ANALYSIS` (Linux) ou `LIS-ANALYSIS.exe` (Windows).
+
+Execução local simplificada (sem empacotar)
+
+```bash
+python run.py --gui
+```
 
 Como compilar (passo a passo)
 
@@ -26,6 +33,7 @@ Windows (PowerShell ou Prompt de Comando)
 ```bat
 scripts\build_windows.bat
 ```
+
 
 3. O executável estará em:
 
@@ -69,6 +77,19 @@ Notas rápidas e solução de problemas
 - Caso falte alguma dependência ao compilar, a mensagem no terminal indicará o pacote que falta; normalmente é só instalar com `pip`.
 - `--onedir` (padrão aqui) gera uma pasta com o executável e arquivos auxiliares — mais fácil para depurar.
 - `--onefile` gera um único `.exe` mas pode ter inicialização mais lenta; use só depois que a versão `--onedir` funcionar.
+
+Higiene do Git (artefatos gerados)
+- Para verificar artefatos rastreados por engano sem alterar nada:
+
+```bash
+./scripts/cleanup_git_artifacts.sh --dry-run
+```
+
+- Para desrastrear artefatos gerados (sem apagar arquivos locais):
+
+```bash
+./scripts/cleanup_git_artifacts.sh --apply
+```
 
 Se quiser que eu gere o executável para você e envie o artefato (via CI), diga qual opção prefere: gerar no Windows (exe) ou no Linux (binário). 
 

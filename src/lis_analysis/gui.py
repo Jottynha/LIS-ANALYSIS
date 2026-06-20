@@ -51,8 +51,31 @@ _plot_import_lock = threading.Lock()
 
 from math import exp, sqrt, erf
 def calcular_risco(H, D, S, N, d, n, V50, sigma_s):
+    """Calcula o risco de falha conforme a formula do artigo citado na GUI.
 
-    # kg
+    Fórmulas usadas:
+      kg = 1.25 + 0.005*(H/D - 6) + 0.25*(e^(-8S/D) - 0.2) - 0.007*(D - 5) + 0.01*(N - 2)
+      CFO = kg * (3400 / (1 + 8/d))
+      sigma_f = 0.06 * CFO
+      CFO_n = CFO * [1 - 4*(sigma_f/CFO)*(1 - 1/sqrt(5n))]
+      sigma_fn = sigma_f / sqrt(5n)
+      risco = 1/2 * [1 - F(Z)]
+    """
+
+    H = float(H)
+    D = float(D)
+    S = float(S)
+    N = float(N)
+    d = float(d)
+    n = float(n)
+    V50 = float(V50)
+    sigma_s = float(sigma_s)
+
+    if D <= 0 or d <= 0 or n <= 0:
+        raise ValueError("D, d e n devem ser maiores que zero.")
+    if sigma_s < 0:
+        raise ValueError("sigma_s nao pode ser negativo.")
+
     kg = (
         1.25
         + 0.005 * ((H / D) - 6)
@@ -61,35 +84,20 @@ def calcular_risco(H, D, S, N, d, n, V50, sigma_s):
         + 0.01 * (N - 2)
     )
 
-    # CFO
-    cfo = kg * (3400 / (1 + 8 / d))
-
-    # sigma_f = 6% do CFO
+    cfo = kg * (3400.0 / (1.0 + 8.0 / d))
     sigma_f = 0.06 * cfo
 
-    # CFO corrigido
-    cfo_n = cfo * (
-        1 - 4 * sigma_f / cfo *
-        (1 - 1 / (n ** (1/5)))
-    )
+    raiz_5n = sqrt(5.0 * n)
+    cfo_n = cfo * (1.0 - 4.0 * (sigma_f / cfo) * (1.0 - 1.0 / raiz_5n))
+    sigma_fn = sigma_f / raiz_5n
 
-    # sigma corrigido
-    sigma_fn = sigma_f / (n ** (1/5))
+    z = (cfo_n - V50) / sqrt((sigma_fn ** 2) + (sigma_s ** 2))
 
-    # Z
-    z = (
-        (cfo_n - V50)
-        /
-        sqrt(sigma_fn**2 + sigma_s**2)
-    )
+    # CDF normal padrão
+    Fz = stats.norm.cdf(z)
 
-    # CDF Normal
-    Fz = 0.5 * (1 + erf(z / sqrt(2)))
-
-    # risco
-    risco = 0.5 * (1 - Fz)
-
-    return risco
+    risco = 0.5 * (1.0 - Fz)
+    return max(0.0, min(0.5, float(risco)))
 
 def _ensure_pipeline_imports():
     global _pipeline_imported
@@ -241,6 +249,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.subconductors_var = tk.DoubleVar(value=3)  # valor padrão: 3
         self.chain_length_var = tk.DoubleVar(value=2)  # valor padrão: 2
         self.gaps_var = tk.DoubleVar(value=4)  # valor padrão: 4
+        self.enable_risk_var = tk.BooleanVar(value=False)
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -336,6 +345,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.parallel_process_var.set(data.get('parallel_process', False))
                 self.atp_file_var.set(data.get('atp_file', ''))
                 
+                self.enable_risk_var.set(data.get('enable_risk_var', False))
+                self.height_var.set(data.get('risk_height', self.height_var.get()))
+                self.distance_var.set(data.get('risk_distance', self.distance_var.get()))
+                self.width_var.set(data.get('risk_width', self.width_var.get()))
+                self.subconductors_var.set(data.get('risk_subconductors', self.subconductors_var.get()))
+                self.chain_length_var.set(data.get('risk_chain_length', self.chain_length_var.get()))
+                self.gaps_var.set(data.get('risk_gaps', self.gaps_var.get()))
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
                 self.plot_points_var.set(data.get('plot_points', True))
@@ -362,6 +378,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
                 'atp_file': self.atp_file_var.get(),
+                'enable_risk_var': self.enable_risk_var.get(),
+                'risk_height': self.height_var.get(),
+                'risk_distance': self.distance_var.get(),
+                'risk_width': self.width_var.get(),
+                'risk_subconductors': self.subconductors_var.get(),
+                'risk_chain_length': self.chain_length_var.get(),
+                'risk_gaps': self.gaps_var.get(),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -544,73 +567,106 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var).pack(anchor="w", pady=5)
 
-        # Card: Índice Inicial
-        index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        index_card.pack(fill="x", pady=(0, 15))
-        
-        ctk.CTkLabel(
-            index_card, 
-            text="Configurações Avançadas",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(anchor="w", padx=15, pady=(15, 10))
-        
-        # Card: Configurações Avançadas
-        index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
-        index_card.pack(fill="x", pady=(0, 15))
+
+        # Card: Configurações Avançadas (risco de falha)
+        advanced_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        advanced_card.pack(fill="x", pady=(0, 15))
 
         ctk.CTkLabel(
-            index_card, 
+            advanced_card,
             text="Configurações Avançadas",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
-        index_frame = ctk.CTkFrame(index_card, fg_color="transparent")
+        ctk.CTkLabel(
+            advanced_card,
+            text="Ative a caixa abaixo para liberar os parâmetros do cálculo e exibir o risco no gráfico.",
+            font=ctk.CTkFont(size=11),
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        ctk.CTkCheckBox(
+            advanced_card,
+            text="Habilitar cálculo e exibição do risco de falha",
+            variable=self.enable_risk_var,
+            command=self._toggle_tower_inputs
+        ).pack(anchor="w", padx=15, pady=(0, 12))
+
+        self.risk_inputs_frame = ctk.CTkFrame(advanced_card, fg_color="transparent")
+        self.risk_inputs_frame.pack(fill="x", padx=15, pady=(0, 15))
+
+        risk_grid = ctk.CTkFrame(self.risk_inputs_frame, fg_color="transparent")
+        risk_grid.pack(anchor="w", fill="x")
+
+        risk_grid.grid_columnconfigure(0, weight=1)
+        risk_grid.grid_columnconfigure(1, weight=1)
+        risk_grid.grid_columnconfigure(2, weight=1)
+        risk_grid.grid_columnconfigure(3, weight=1)
+        risk_grid.grid_columnconfigure(4, weight=1)
+        risk_grid.grid_columnconfigure(5, weight=1)
+
+        ctk.CTkLabel(risk_grid, text="Altura do condutor (H) [m]:").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.height_entry = ctk.CTkEntry(risk_grid, textvariable=self.height_var, width=120)
+        self.height_entry.grid(row=0, column=1, sticky="w", padx=(0, 14), pady=4)
+
+        ctk.CTkLabel(risk_grid, text="Distância condutor-estrutura (D) [m]:").grid(row=0, column=2, sticky="w", padx=(0, 8), pady=4)
+        self.distance_entry = ctk.CTkEntry(risk_grid, textvariable=self.distance_var, width=120)
+        self.distance_entry.grid(row=0, column=3, sticky="w", padx=(0, 14), pady=4)
+
+        ctk.CTkLabel(risk_grid, text="Largura da torre (S) [m]:").grid(row=0, column=4, sticky="w", padx=(0, 8), pady=4)
+        self.width_entry = ctk.CTkEntry(risk_grid, textvariable=self.width_var, width=120)
+        self.width_entry.grid(row=0, column=5, sticky="w", pady=4)
+
+        ctk.CTkLabel(risk_grid, text="Número de subcondutores por fase (N):").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        self.subconductors_entry = ctk.CTkEntry(risk_grid, textvariable=self.subconductors_var, width=120)
+        self.subconductors_entry.grid(row=1, column=1, sticky="w", padx=(0, 14), pady=4)
+
+        ctk.CTkLabel(risk_grid, text="Comprimento da cadeia / d [m]:").grid(row=1, column=2, sticky="w", padx=(0, 8), pady=4)
+        self.chain_length_entry = ctk.CTkEntry(risk_grid, textvariable=self.chain_length_var, width=120)
+        self.chain_length_entry.grid(row=1, column=3, sticky="w", padx=(0, 14), pady=4)
+
+        ctk.CTkLabel(risk_grid, text="Número de gaps em paralelo (n):").grid(row=1, column=4, sticky="w", padx=(0, 8), pady=4)
+        self.gaps_entry = ctk.CTkEntry(risk_grid, textvariable=self.gaps_var, width=120)
+        self.gaps_entry.grid(row=1, column=5, sticky="w", pady=4)
+
+        index_frame = ctk.CTkFrame(advanced_card, fg_color="transparent")
         index_frame.pack(anchor="w", padx=15, pady=(0, 15))
 
-        # H: Height of the driver (m)
-        self.height_var = tk.DoubleVar(value=10)  # valor padrão: 10
-        ctk.CTkLabel(index_frame, text="Altura do motorista (m):").grid(row=0, column=0, padx=(0, 10))
-        self.height_entry = ctk.CTkEntry(index_frame, textvariable=self.height_var, width=80)
-        self.height_entry.grid(row=0, column=1, sticky="w")
-
-        # D: Distance between the driver and the tower (m)
-        self.distance_var = tk.DoubleVar(value=20)  # valor padrão: 20
-        ctk.CTkLabel(index_frame, text="Distância entre o motorista e a torre (m):").grid(row=1, column=0, padx=(0, 10))
-        self.distance_entry = ctk.CTkEntry(index_frame, textvariable=self.distance_var, width=80)
-        self.distance_entry.grid(row=1, column=1, sticky="w")
-
-        # S: Width of the tower (m)
-        self.width_var = tk.DoubleVar(value=5)  # valor padrão: 5
-        ctk.CTkLabel(index_frame, text="Largura da torre (m):").grid(row=2, column=0, padx=(0, 10))
-        self.width_entry = ctk.CTkEntry(index_frame, textvariable=self.width_var, width=80)
-        self.width_entry.grid(row=2, column=1, sticky="w")
-
-        # N: Number of subconductors
-        self.subconductors_var = tk.DoubleVar(value=3)  # valor padrão: 3
-        ctk.CTkLabel(index_frame, text="Número de subcondutores:").grid(row=3, column=0, padx=(0, 10))
-        self.subconductors_entry = ctk.CTkEntry(index_frame, textvariable=self.subconductors_var, width=80)
-        self.subconductors_entry.grid(row=3, column=1, sticky="w")
-
-        # d: Length of the insulator chain (m)
-        self.chain_length_var = tk.DoubleVar(value=2)  # valor padrão: 2
-        ctk.CTkLabel(index_frame, text="Comprimento da cadeia de isoladores (m):").grid(row=5, column=0, padx=(0, 11))
-        self.chain_length_entry = ctk.CTkEntry(index_frame, textvariable=self.chain_length_var, width=80)
-        self.chain_length_entry.grid(row=5, column=1, sticky="w")
-
-        # n: Number of gaps in parallel
-        self.gaps_var = tk.DoubleVar(value=4)  # valor padrão: 4
-        ctk.CTkLabel(index_frame, text="Número de furos paralelos:").grid(row=6, column=0, padx=(0, 12))
-        self.gaps_entry = ctk.CTkEntry(index_frame, textvariable=self.gaps_var, width=80)
-        self.gaps_entry.grid(row=6, column=1, sticky="w")
-
-
-
-        index_frame = ctk.CTkFrame(index_card, fg_color="transparent")
-        index_frame.pack(anchor="w", padx=15, pady=(0, 15))
-        
         ctk.CTkLabel(index_frame, text="Índice inicial:").pack(side="left", padx=(0, 10))
         ctk.CTkEntry(index_frame, textvariable=self.start_idx_var, width=80).pack(side="left")
-    
+
+        self._toggle_tower_inputs()
+
+    def _toggle_tower_inputs(self):
+        """Mostra ou oculta os campos do cálculo de risco e habilita sua edição."""
+        frame = getattr(self, "risk_inputs_frame", None)
+        if frame is not None:
+            try:
+                if self.enable_risk_var.get():
+                    if not frame.winfo_ismapped():
+                        frame.pack(fill="x", padx=15, pady=(0, 15))
+                else:
+                    if frame.winfo_ismapped():
+                        frame.pack_forget()
+            except Exception:
+                pass
+
+        state = "normal" if self.enable_risk_var.get() else "disabled"
+        for widget in [
+            getattr(self, "height_entry", None),
+            getattr(self, "distance_entry", None),
+            getattr(self, "width_entry", None),
+            getattr(self, "subconductors_entry", None),
+            getattr(self, "chain_length_entry", None),
+            getattr(self, "gaps_entry", None),
+        ]:
+            if widget is None:
+                continue
+            try:
+                widget.configure(state=state)
+            except Exception:
+                pass
+
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
         tab = self.tabview.tab("Analise .lis")
@@ -3301,27 +3357,40 @@ class ModernLisAnalysisApp(ctk.CTk):
             
             x, y, mu, sigma = res
 
-            # calculando risco de falha  
-            H = float(self.height_var.get())
-            D = float(self.distance_var.get())
-            S = float(self.width_var.get())
-            N = float(self.subconductors_var.get())
-            d = float(self.chain_length_var.get())
-            n = float(self.gaps_var.get())
-            V50 = mu
-            sigma_s = sigma
-            print(f"Calculando risco com: H={H}, D={D}, S={S}, N={N}, d={d}, n={n}, V50={V50}, sigma_s={sigma_s}")
-            # Calculate the risk
-            risk = calcular_risco(H, D, S, N, d, n, V50, sigma_s)
-            print("Risco calculado:", risk)
+            risk = None
+            if getattr(self, "enable_risk_var", None) is not None and self.enable_risk_var.get():
+                try:
+                    H = float(self.height_var.get())
+                    D = float(self.distance_var.get())
+                    S = float(self.width_var.get())
+                    N = float(self.subconductors_var.get())
+                    d = float(self.chain_length_var.get())
+                    n = float(self.gaps_var.get())
+                    V50 = float(mu)
+                    sigma_s = float(sigma)
+                    self.log(
+                        f"[Risco] Calculando com H={H}, D={D}, S={S}, N={N}, d={d}, n={n}, V50={V50}, sigma_s={sigma_s}"
+                    )
+                    risk = calcular_risco(H, D, S, N, d, n, V50, sigma_s)
+                    self.log(f"[Risco] Risco calculado: {risk:.6e}")
+                except Exception as exc:
+                    self.log(f"[Risco] Nao foi possivel calcular o risco: {exc}")
+                    risk = None
 
-
-            
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
-            ax.text(0.5, 0.9, f'Risco: {risk}', ha='center', transform=ax.transAxes)
+            if risk is not None:
+                ax.text(
+                    0.5,
+                    0.94,
+                    f"Risco de falha: {risk:.3e}",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontweight="bold",
+                )
 
-            # Barras de frequência
+# Barras de frequência
             if plot_options.get('show_bars', True):
                 unique_x = np.unique(x)
                 if unique_x.size > 1:

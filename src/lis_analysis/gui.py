@@ -18,6 +18,7 @@ from .batch_runner import SweepParameterRef, generate_sweep_values, run_paramete
 from .solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
 from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from .atp_writer import write_atp_file
+from .failure_risk import FailureRiskConfig, FailureRiskResult, calculate_failure_risk
 from .control_detector import (
     ControlDetector,
     FileControlInfo,
@@ -193,6 +194,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._log_max_lines = 3000
         self._log_trim_every = 20
         self._log_entries_since_trim = 0
+
+        # Risco de falha - valores de referencia do artigo SBSE 2025.
+        self.enable_risk_var = tk.BooleanVar(value=False)
+        self.risk_base_voltage_var = tk.StringVar(value="429")
+        self.risk_height_var = tk.StringVar(value="17.98")
+        self.risk_distance_var = tk.StringVar(value="3.50")
+        self.risk_width_var = tk.StringVar(value="2.0")
+        self.risk_subconductors_var = tk.StringVar(value="4")
+        self.risk_insulation_distance_var = tk.StringVar(value="3.50")
+        self.risk_parallel_gaps_var = tk.StringVar(value="804")
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -289,6 +300,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
                 self.atp_file_var.set(data.get('atp_file', ''))
+                self.enable_risk_var.set(data.get('enable_failure_risk', False))
+                self.risk_base_voltage_var.set(data.get('risk_base_voltage_kv', '429'))
+                self.risk_height_var.set(data.get('risk_height_m', '17.98'))
+                self.risk_distance_var.set(data.get('risk_distance_m', '3.50'))
+                self.risk_width_var.set(data.get('risk_tower_width_m', '2.0'))
+                self.risk_subconductors_var.set(data.get('risk_subconductors', '4'))
+                self.risk_insulation_distance_var.set(data.get('risk_insulation_distance_m', '3.50'))
+                self.risk_parallel_gaps_var.set(data.get('risk_parallel_gaps', '804'))
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -316,6 +335,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
                 'atp_file': self.atp_file_var.get(),
+                'enable_failure_risk': self.enable_risk_var.get(),
+                'risk_base_voltage_kv': self.risk_base_voltage_var.get(),
+                'risk_height_m': self.risk_height_var.get(),
+                'risk_distance_m': self.risk_distance_var.get(),
+                'risk_tower_width_m': self.risk_width_var.get(),
+                'risk_subconductors': self.risk_subconductors_var.get(),
+                'risk_insulation_distance_m': self.risk_insulation_distance_var.get(),
+                'risk_parallel_gaps': self.risk_parallel_gaps_var.get(),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -498,6 +525,58 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var).pack(anchor="w", pady=5)
         
+        # Card: calculo do risco de falha conforme a subsecao 3.2 do artigo.
+        risk_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        risk_card.pack(fill="x", pady=(0, 15))
+
+        ctk.CTkLabel(
+            risk_card,
+            text="Risco de Falha - Hileman (1999)",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).pack(anchor="w", padx=15, pady=(15, 8))
+        ctk.CTkLabel(
+            risk_card,
+            text=(
+                "Equações (1)-(6) da subseção 3.2. A média e o desvio-padrão "
+                "do LIS são convertidos de p.u. para kV."
+            ),
+            font=ctk.CTkFont(size=11),
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+        ctk.CTkCheckBox(
+            risk_card,
+            text="Calcular e exibir o risco de falha nos gráficos",
+            variable=self.enable_risk_var,
+            command=self._toggle_risk_inputs,
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
+        self.risk_inputs_frame = ctk.CTkFrame(risk_card, fg_color="transparent")
+        self.risk_inputs_frame.pack(fill="x", padx=15, pady=(0, 15))
+        risk_grid = ctk.CTkFrame(self.risk_inputs_frame, fg_color="transparent")
+        risk_grid.pack(fill="x")
+
+        risk_fields = [
+            ("Tensão-base [kV]", self.risk_base_voltage_var),
+            ("Altura do condutor H [m]", self.risk_height_var),
+            ("Distância condutor-estrutura D [m]", self.risk_distance_var),
+            ("Largura da torre S [m]", self.risk_width_var),
+            ("Subcondutores/fase N", self.risk_subconductors_var),
+            ("Menor distância de isolamento d [m]", self.risk_insulation_distance_var),
+            ("Gaps em paralelo n (201 x 4)", self.risk_parallel_gaps_var),
+        ]
+        self._risk_entries = []
+        for idx, (label, variable) in enumerate(risk_fields):
+            row = idx // 2
+            pair_col = (idx % 2) * 2
+            ctk.CTkLabel(risk_grid, text=f"{label}:").grid(
+                row=row, column=pair_col, sticky="w", padx=(0, 8), pady=4
+            )
+            entry = ctk.CTkEntry(risk_grid, textvariable=variable, width=130)
+            entry.grid(row=row, column=pair_col + 1, sticky="w", padx=(0, 24), pady=4)
+            self._risk_entries.append(entry)
+
+        self._toggle_risk_inputs()
+
         # Card: Índice Inicial
         index_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         index_card.pack(fill="x", pady=(0, 15))
@@ -514,6 +593,45 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkLabel(index_frame, text="Índice inicial:").pack(side="left", padx=(0, 10))
         ctk.CTkEntry(index_frame, textvariable=self.start_idx_var, width=80).pack(side="left")
     
+    def _toggle_risk_inputs(self):
+        frame = getattr(self, "risk_inputs_frame", None)
+        if frame is None:
+            return
+
+        if self.enable_risk_var.get():
+            if not frame.winfo_manager():
+                frame.pack(fill="x", padx=15, pady=(0, 15))
+        else:
+            frame.pack_forget()
+
+    @staticmethod
+    def _parse_risk_number(raw_value: str, field_name: str) -> float:
+        normalized = str(raw_value).strip().replace(",", ".")
+        if not normalized:
+            raise ValueError(f"{field_name} nao informado")
+        try:
+            return float(normalized)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} invalido: {raw_value}") from exc
+
+    def _collect_risk_config(self) -> FailureRiskConfig | None:
+        if not self.enable_risk_var.get():
+            return None
+
+        config = FailureRiskConfig(
+            base_voltage_kv=self._parse_risk_number(self.risk_base_voltage_var.get(), "Tensao-base"),
+            conductor_height_m=self._parse_risk_number(self.risk_height_var.get(), "H"),
+            conductor_structure_distance_m=self._parse_risk_number(self.risk_distance_var.get(), "D"),
+            tower_width_m=self._parse_risk_number(self.risk_width_var.get(), "S"),
+            subconductors_per_phase=self._parse_risk_number(self.risk_subconductors_var.get(), "N"),
+            insulation_distance_m=self._parse_risk_number(
+                self.risk_insulation_distance_var.get(), "d"
+            ),
+            parallel_gaps=self._parse_risk_number(self.risk_parallel_gaps_var.get(), "n"),
+        )
+        calculate_failure_risk(1.0, 0.1, config)
+        return config
+
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
         tab = self.tabview.tab("Analise .lis")
@@ -2091,6 +2209,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             stop = self._parse_float_field(self.atp_sweep_stop_var.get(), "Fim")
             step = self._parse_float_field(self.atp_sweep_step_var.get(), "Passo")
             sweep_values = generate_sweep_values(start, stop, step)
+            risk_config = self._collect_risk_config()
         except Exception as exc:
             self._show_error("Erro", "Configuracao invalida para o sweep.", details=[("Detalhes", str(exc))])
             return
@@ -2106,6 +2225,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             'show_gaussian': self.plot_gaussian_var.get(),
             'show_cumulative': self.plot_cumulative_var.get(),
             'show_stats_box': self.plot_stats_box_var.get(),
+            'risk_config': risk_config,
         }
 
         self._atp_cancel_event.clear()
@@ -3061,6 +3181,16 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_warning("Aviso", "Nenhum arquivo selecionado.", details=[("Ação", "Marque os arquivos que deseja processar.")])
             return
         
+        try:
+            risk_config = self._collect_risk_config()
+        except ValueError as exc:
+            self._show_error(
+                "Risco de falha",
+                "Parametros invalidos para o calculo do risco.",
+                details=[("Detalhes", str(exc))],
+            )
+            return
+
         self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
         self.status_var.set(f"Processando {len(selected_files)} arquivo(s)...")
         
@@ -3087,6 +3217,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     'show_gaussian': self.plot_gaussian_var.get(),
                     'show_cumulative': self.plot_cumulative_var.get(),
                     'show_stats_box': self.plot_stats_box_var.get(),
+                    'risk_config': risk_config,
                 }
                 
                 excel_paths = []  # Armazenar paths dos Excel para comparativo
@@ -3209,6 +3340,21 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         threading.Thread(target=worker, daemon=True).start()
     
+    def _calculate_plot_risk(self, mu, sigma, plot_options: dict) -> FailureRiskResult | None:
+        config = plot_options.get("risk_config")
+        if config is None:
+            return None
+        try:
+            result = calculate_failure_risk(float(mu), float(sigma), config)
+            self.log(
+                f"[Risco] R={result.risk:.6e} | CFO corrigido="
+                f"{result.corrected_cfo_kv:.2f} kV | Z={result.z_score:.4f}"
+            )
+            return result
+        except Exception as exc:
+            self.log(f"[Risco] Nao foi possivel calcular o risco: {exc}")
+            return None
+
     def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico individual com opções customizadas de visualização"""
         try:
@@ -3221,9 +3367,25 @@ class ModernLisAnalysisApp(ctk.CTk):
                 return
             
             x, y, mu, sigma = res
+            risk_result = self._calculate_plot_risk(mu, sigma, plot_options)
             
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
+            if risk_result is not None:
+                ax.text(
+                    0.5,
+                    0.96,
+                    (
+                        f"Risco de falha = {risk_result.risk:.3e}   |   "
+                        f"CFO corrigido = {risk_result.corrected_cfo_kv:.1f} kV"
+                    ),
+                    ha="center",
+                    va="top",
+                    transform=ax.transAxes,
+                    fontsize=10,
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="0.4", alpha=0.9),
+                )
             
             # Barras de frequência
             if plot_options.get('show_bars', True):
@@ -3305,6 +3467,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                         f"CV = {_safe_float(computed_stats.get('cv', float('nan'))):.6g}\\n"
                         f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
                     )
+                    if risk_result is not None:
+                        stats_text += (
+                            f"\nRisco = {risk_result.risk:.3e}"
+                            f"\nCFO_n = {risk_result.corrected_cfo_kv:.1f} kV"
+                            f"\nZ = {risk_result.z_score:.4f}"
+                        )
                     
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
                     ax.text(0.98, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
@@ -3427,8 +3595,10 @@ class ModernLisAnalysisApp(ctk.CTk):
             else:
                 ax.legend(ncol=2, fontsize=9, loc='best', framealpha=0.9)
             
-            # Caixa de estatísticas resumida
-            if plot_options.get('show_stats_box', True):
+            # Caixa de estatisticas resumida. Se o risco estiver habilitado,
+            # ele permanece visivel inclusive no modo "so comparativo".
+            risk_config = plot_options.get("risk_config")
+            if plot_options.get('show_stats_box', True) or risk_config is not None:
                 stats_text = f"Comparativo de {len(series_data)} arquivos:\n"
                 for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
                     def _safe_float(val):
@@ -3443,7 +3613,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                     
                     mu_val = _safe_float(mu)
                     sigma_val = _safe_float(sigma)
-                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
+                    risk_suffix = ""
+                    if risk_config is not None:
+                        try:
+                            risk_result = calculate_failure_risk(mu_val, sigma_val, risk_config)
+                            risk_suffix = f"  R={risk_result.risk:.3e}"
+                        except Exception as exc:
+                            risk_suffix = "  R=erro"
+                            self.log(f"[Risco] {label}: {exc}")
+                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}{risk_suffix}"
                 
                 bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=8,

@@ -938,6 +938,52 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.simulation_results.configure(state="disabled")
         self._apply_atp_params_expand_state()
     
+    @staticmethod
+    def _failure_risk_record(label: str, result: FailureRiskResult) -> dict:
+        return {
+            "label": str(label),
+            "risk": float(result.risk),
+            "corrected_cfo_kv": float(result.corrected_cfo_kv),
+            "z_score": float(result.z_score),
+            "mean_overvoltage_kv": float(result.mean_overvoltage_kv),
+            "switching_std_kv": float(result.switching_std_kv),
+        }
+
+    @staticmethod
+    def _write_failure_risk_report(output_dir: Path, context: str, records: list[dict]) -> Path | None:
+        """Grava os resultados de risco em um arquivo proprio na pasta de saida."""
+        if not records:
+            return None
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        report_path = output_dir / "risco_de_falha.txt"
+        lines = [
+            "RELATORIO DE RISCO DE FALHA",
+            f"Contexto: {context}",
+            f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Resultados: {len(records)}",
+            "",
+        ]
+
+        for index, record in enumerate(records, start=1):
+            risk = float(record["risk"])
+            lines.extend(
+                [
+                    f"[{index}] {record['label']}",
+                    f"Probabilidade de falha: {risk * 100.0:.8g}%",
+                    f"R: {risk:.10e}",
+                    f"CFO corrigido: {float(record['corrected_cfo_kv']):.4f} kV",
+                    f"Indice normalizado Z: {float(record['z_score']):.6f}",
+                    f"Sobretensao media: {float(record['mean_overvoltage_kv']):.4f} kV",
+                    f"Desvio-padrao da sobretensao: {float(record['switching_std_kv']):.4f} kV",
+                    "",
+                ]
+            )
+
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        return report_path
+
     def _build_logs_tab(self):
         """Aba de Logs"""
         tab = self.tabview.tab("Logs")
@@ -1963,11 +2009,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         hide_errors: bool,
         only_comparative: bool,
         report_progress=None,
-    ) -> dict[str, str | None]:
+    ) -> dict[str, object]:
         parsed = parse_lis_once(lis_path, verbose=False)
         df, _stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
         excel_path = None
         table_warning = None
+        risk_record = None
 
         if df is None:
             table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
@@ -1977,12 +2024,26 @@ class ModernLisAnalysisApp(ctk.CTk):
             excel_path = run_dir / f"{lis_path.stem}.xlsx"
             save_df_to_excel_only(df, excel_path)
 
+            computed_stats = None
             try:
                 computed_stats = calcular_estatisticas_do_df(df)
                 escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
             except Exception as exc:
                 if not hide_errors and report_progress is not None:
                     report_progress(f"Aviso: falha em estatisticas: {exc}")
+
+            risk_config = plot_options.get("risk_config")
+            if risk_config is not None and computed_stats is not None:
+                try:
+                    result = calculate_failure_risk(
+                        computed_stats["mean"],
+                        computed_stats["std_dev"],
+                        risk_config,
+                    )
+                    risk_record = self._failure_risk_record(lis_path.name, result)
+                except Exception as exc:
+                    if not hide_errors and report_progress is not None:
+                        report_progress(f"Aviso: falha no calculo de risco: {exc}")
 
             if not only_comparative:
                 graph_name = f"grafico_{lis_path.stem}.png"
@@ -2013,6 +2074,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         return {
             "excel_path": str(excel_path) if excel_path else None,
             "table_warning": table_warning,
+            "risk_record": risk_record,
         }
 
     def _cancel_atp_execution(self):
@@ -2095,6 +2157,24 @@ class ModernLisAnalysisApp(ctk.CTk):
         elapsed = self._set_atp_feedback_finished(success=completed_all, final_progress=final_progress)
         summary_text = self._format_atp_sweep_summary(summary)
         self._update_simulation_results(summary_text)
+
+        risk_records = []
+        for run_result in summary.results:
+            analysis = run_result.analysis
+            if not isinstance(analysis, dict) or not analysis.get("risk_record"):
+                continue
+            record = dict(analysis["risk_record"])
+            record["label"] = (
+                f"Execucao {run_result.run_index:03d} - "
+                f"{summary.parameter.display_label} = {run_result.value:g}"
+            )
+            risk_records.append(record)
+        if risk_records:
+            self._write_failure_risk_report(
+                summary.output_dir,
+                "Sweep ATP",
+                risk_records,
+            )
 
         if summary.cancelled:
             self.status_var.set("Sweep cancelado")
@@ -2701,12 +2781,23 @@ class ModernLisAnalysisApp(ctk.CTk):
         show_plots = self.show_plots_var.get()
         hide_errors = self.hide_errors_var.get()
         only_comparative = self.only_comparative_var.get()
+        try:
+            risk_config = self._collect_risk_config()
+        except ValueError as exc:
+            self._show_error(
+                "Risco de falha",
+                "Os parametros do calculo de risco sao invalidos.",
+                details=[("Detalhes", str(exc))],
+            )
+            return
+
         plot_options = {
             'show_bars': self.plot_bars_var.get(),
             'show_points': self.plot_points_var.get(),
             'show_gaussian': self.plot_gaussian_var.get(),
             'show_cumulative': self.plot_cumulative_var.get(),
             'show_stats_box': self.plot_stats_box_var.get(),
+            'risk_config': risk_config,
         }
 
         try:
@@ -2820,6 +2911,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 df, stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
                 excel_path = None
                 table_warning = None
+                risk_records = []
                 if df is None:
                     table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
                     report_progress(f"Warning: {table_warning}")
@@ -2827,12 +2919,27 @@ class ModernLisAnalysisApp(ctk.CTk):
                     excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
                     save_df_to_excel_only(df, excel_path)
 
+                    computed_stats = None
                     try:
                         computed_stats = calcular_estatisticas_do_df(df)
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
                     except Exception as e:
                         if not hide_errors:
                             report_progress(f"Warning: falha em estatisticas: {e}")
+
+                    if risk_config is not None and computed_stats is not None:
+                        try:
+                            result = calculate_failure_risk(
+                                computed_stats["mean"],
+                                computed_stats["std_dev"],
+                                risk_config,
+                            )
+                            risk_records.append(
+                                self._failure_risk_record(lis_target.name, result)
+                            )
+                        except Exception as exc:
+                            if not hide_errors:
+                                report_progress(f"Warning: falha no calculo de risco: {exc}")
 
                     if not only_comparative:
                         report_progress("Generating chart from analyzed data...")
@@ -2864,12 +2971,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                     if not hide_errors:
                         report_progress(f"Warning: falha em series temporais: {e}")
 
+                risk_report_path = self._write_failure_risk_report(
+                    sim_outdir,
+                    "Simulacao ATP",
+                    risk_records,
+                )
                 payload = {
                     "lis_path": str(lis_target),
                     "outdir": str(sim_outdir),
                     "excel_path": str(excel_path) if excel_path else None,
                     "applied_overrides": len(atp_overrides),
                     "table_warning": table_warning,
+                    "risk_report_path": str(risk_report_path) if risk_report_path else None,
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
             except Exception as e:
@@ -2909,6 +3022,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             outdir = payload.get("outdir") if isinstance(payload, dict) else None
             overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
             table_warning = payload.get("table_warning") if isinstance(payload, dict) else None
+            risk_report_path = payload.get("risk_report_path") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
             self.atp_batch_progress_var.set("1 / 1")
             self.atp_batch_status_var.set("Simulacao concluida")
@@ -2922,6 +3036,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             self._update_simulation_results(
                 f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}\nParameter overrides: {overrides_count}"
+                + (f"\nRisk report: {risk_report_path}" if risk_report_path else "")
                 + (f"\nWarning: {table_warning}" if table_warning else "")
             )
 
@@ -3221,6 +3336,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 }
                 
                 excel_paths = []  # Armazenar paths dos Excel para comparativo
+                risk_records = []
                 total = len(selected_files)
                 
                 # NOTA: Processamento paralelo (parallel_process) desabilitado por segurança
@@ -3254,6 +3370,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     excel_paths.append(excel_path)  # Adicionar à lista para comparativo
                     
                     # Estatísticas
+                    computed_stats = None
                     try:
                         computed_stats = calcular_estatisticas_do_df(df)
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
@@ -3269,6 +3386,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                                     details=[("Detalhes", msg)],
                                 ),
                             )
+
+                    if risk_config is not None and computed_stats is not None:
+                        try:
+                            result = calculate_failure_risk(
+                                computed_stats["mean"],
+                                computed_stats["std_dev"],
+                                risk_config,
+                            )
+                            risk_records.append(self._failure_risk_record(lis_path.name, result))
+                        except Exception as exc:
+                            if not self.hide_errors_var.get():
+                                self.log(f"Falha ao calcular risco para {lis_path.name}: {exc}")
                     
                     # Gráfico individual (se não for modo "só comparativo")
                     if not self.only_comparative_var.get():
@@ -3305,6 +3434,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self.log(f"Log salvo: {log_file.name}")
                 
                 # Finalizar
+                if risk_records:
+                    self._write_failure_risk_report(
+                        outdir,
+                        "Analise de arquivos LIS",
+                        risk_records,
+                    )
                 self._set_main_progress(1.0)
                 self.status_var.set(f"Processamento concluído! {len(selected_files)} arquivo(s)")
                 self.log(f"Processamento finalizado com sucesso em: {outdir.name}")
@@ -3340,21 +3475,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         threading.Thread(target=worker, daemon=True).start()
     
-    def _calculate_plot_risk(self, mu, sigma, plot_options: dict) -> FailureRiskResult | None:
-        config = plot_options.get("risk_config")
-        if config is None:
-            return None
-        try:
-            result = calculate_failure_risk(float(mu), float(sigma), config)
-            self.log(
-                f"[Risco] R={result.risk:.6e} | CFO corrigido="
-                f"{result.corrected_cfo_kv:.2f} kV | Z={result.z_score:.4f}"
-            )
-            return result
-        except Exception as exc:
-            self.log(f"[Risco] Nao foi possivel calcular o risco: {exc}")
-            return None
-
     def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico individual com opções customizadas de visualização"""
         try:
@@ -3367,26 +3487,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 return
             
             x, y, mu, sigma = res
-            risk_result = self._calculate_plot_risk(mu, sigma, plot_options)
             
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
-            if risk_result is not None:
-                ax.text(
-                    0.5,
-                    0.96,
-                    (
-                        f"Risco de falha = {risk_result.risk:.3e}   |   "
-                        f"CFO corrigido = {risk_result.corrected_cfo_kv:.1f} kV"
-                    ),
-                    ha="center",
-                    va="top",
-                    transform=ax.transAxes,
-                    fontsize=10,
-                    fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.4", fc="white", ec="0.4", alpha=0.9),
-                )
-            
             # Barras de frequência
             if plot_options.get('show_bars', True):
                 unique_x = np.unique(x)
@@ -3467,13 +3570,6 @@ class ModernLisAnalysisApp(ctk.CTk):
                         f"CV = {_safe_float(computed_stats.get('cv', float('nan'))):.6g}\\n"
                         f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
                     )
-                    if risk_result is not None:
-                        stats_text += (
-                            f"\nRisco = {risk_result.risk:.3e}"
-                            f"\nCFO_n = {risk_result.corrected_cfo_kv:.1f} kV"
-                            f"\nZ = {risk_result.z_score:.4f}"
-                        )
-                    
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
                     ax.text(0.98, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
                             verticalalignment='top', horizontalalignment='right', bbox=bbox_props)
@@ -3595,10 +3691,8 @@ class ModernLisAnalysisApp(ctk.CTk):
             else:
                 ax.legend(ncol=2, fontsize=9, loc='best', framealpha=0.9)
             
-            # Caixa de estatisticas resumida. Se o risco estiver habilitado,
-            # ele permanece visivel inclusive no modo "so comparativo".
-            risk_config = plot_options.get("risk_config")
-            if plot_options.get('show_stats_box', True) or risk_config is not None:
+            # Caixa de estatisticas resumida.
+            if plot_options.get('show_stats_box', True):
                 stats_text = f"Comparativo de {len(series_data)} arquivos:\n"
                 for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
                     def _safe_float(val):
@@ -3613,15 +3707,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     
                     mu_val = _safe_float(mu)
                     sigma_val = _safe_float(sigma)
-                    risk_suffix = ""
-                    if risk_config is not None:
-                        try:
-                            risk_result = calculate_failure_risk(mu_val, sigma_val, risk_config)
-                            risk_suffix = f"  R={risk_result.risk:.3e}"
-                        except Exception as exc:
-                            risk_suffix = "  R=erro"
-                            self.log(f"[Risco] {label}: {exc}")
-                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}{risk_suffix}"
+                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
                 
                 bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=8,

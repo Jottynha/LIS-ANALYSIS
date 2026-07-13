@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -70,6 +71,15 @@ class SweepExecutionSummary:
     @property
     def cancelled_count(self) -> int:
         return sum(1 for result in self.results if result.status == "cancelled")
+
+    @property
+    def skipped_count(self) -> int:
+        return sum(1 for result in self.results if result.status == "skipped")
+
+    @property
+    def processed_count(self) -> int:
+        """Quantidade de runs que realmente chegaram a uma conclusao de execucao."""
+        return self.success_count + self.failure_count
 
     @property
     def elapsed_seconds(self) -> float:
@@ -257,7 +267,12 @@ def run_parameter_sweep(
             total_runs=total_runs,
             lis_parser=lis_parser,
             event_callback=event_callback,
+            lis_parser_lock=lis_parser_lock,
         )
+
+    # O solver pode rodar em paralelo, mas o pos-processamento da GUI usa
+    # matplotlib.pyplot, cujo estado global nao e seguro entre threads.
+    lis_parser_lock = threading.Lock() if parallel_runs > 1 and lis_parser is not None else None
 
     if parallel_runs <= 1:
         for result in summary.results:
@@ -281,17 +296,29 @@ def run_parameter_sweep(
     if cancel_event is not None and cancel_event.is_set():
         summary.cancelled = True
 
+    if summary.cancelled:
+        for result in summary.results:
+            if result.status == "pending":
+                result.status = "cancelled"
+                result.error = "cancelled before execution"
+    elif summary.stopped_on_error:
+        for result in summary.results:
+            if result.status == "pending":
+                result.status = "skipped"
+                result.error = "not executed after previous failure"
+
     summary.finished_at = datetime.now()
+    processed_progress = summary.processed_count / max(1, total_runs)
 
     if summary.cancelled:
         _emit_event(
             event_callback,
             type="sweep_cancelled",
             message="Sweep cancelado pelo usuario",
-            run_index=len(summary.results),
+            run_index=summary.processed_count,
             total_runs=total_runs,
             value=None,
-            progress=min(1.0, len(summary.results) / max(1, total_runs)),
+            progress=processed_progress,
             output_dir=sweep_dir,
         )
 
@@ -300,14 +327,13 @@ def run_parameter_sweep(
         type="sweep_finished",
         message=(
             f"Sweep finalizado: {summary.success_count} sucesso(s), "
-            f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s)"
+            f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s), "
+            f"{summary.skipped_count} ignorada(s)"
         ),
-        run_index=len(summary.results),
+        run_index=summary.processed_count,
         total_runs=total_runs,
         value=None,
-        progress=1.0 if not summary.cancelled and not summary.stopped_on_error else min(
-            1.0, len(summary.results) / max(1, total_runs)
-        ),
+        progress=1.0 if not summary.cancelled and not summary.stopped_on_error else processed_progress,
         output_dir=sweep_dir,
         summary=summary,
     )
@@ -646,6 +672,7 @@ def _finalize_sweep_run(
     total_runs: int,
     lis_parser: SweepLisParser | None,
     event_callback: SweepEventCallback | None,
+    lis_parser_lock: threading.Lock | None,
 ) -> None:
     if result.status != "solver_completed":
         return
@@ -664,13 +691,20 @@ def _finalize_sweep_run(
                 lis_path=result.lis_path,
             )
             parse_started = time.monotonic()
-            result.analysis = lis_parser(
-                result.lis_path,
-                result.run_dir,
-                result.value,
-                result.run_index,
-                total_runs,
-            )
+            def _parse_lis() -> Any:
+                return lis_parser(
+                    result.lis_path,
+                    result.run_dir,
+                    result.value,
+                    result.run_index,
+                    total_runs,
+                )
+
+            if lis_parser_lock is None:
+                result.analysis = _parse_lis()
+            else:
+                with lis_parser_lock:
+                    result.analysis = _parse_lis()
             result.elapsed_seconds += time.monotonic() - parse_started
 
         result.status = "success"

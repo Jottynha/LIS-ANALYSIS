@@ -211,6 +211,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_cancel_event = threading.Event()
         self._atp_active_mode = None
         self._atp_runtime_status_text = "Aguardando execucao"
+        self._atp_sweep_completed_runs = set()
+        self._atp_sweep_parallel_active = False
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
@@ -1915,12 +1917,27 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         total_runs = int(event.get("total_runs", 0) or 0)
         run_index = int(event.get("run_index", 0) or 0)
+        event_type = str(event.get("type", ""))
+        if self._atp_sweep_parallel_active and event_type in {"run_succeeded", "run_failed"}:
+            self._atp_sweep_completed_runs.add(run_index)
+
         if total_runs:
-            self.atp_batch_progress_var.set(f"{min(run_index, total_runs)} / {total_runs}")
+            displayed_runs = (
+                len(self._atp_sweep_completed_runs)
+                if self._atp_sweep_parallel_active
+                else min(run_index, total_runs)
+            )
+            self.atp_batch_progress_var.set(f"{displayed_runs} / {total_runs}")
 
         progress = event.get("progress")
         if progress is not None:
-            self._set_atp_progress(float(progress))
+            if self._atp_sweep_parallel_active:
+                if event_type in {"run_succeeded", "run_failed"} and total_runs:
+                    self._set_atp_progress(len(self._atp_sweep_completed_runs) / total_runs)
+                elif event_type in {"sweep_cancelled", "sweep_finished"}:
+                    self._set_atp_progress(max(self._atp_progress_value, float(progress)))
+            else:
+                self._set_atp_progress(max(self._atp_progress_value, float(progress)))
 
     def _format_atp_sweep_summary(self, summary) -> str:
         lines = [
@@ -1929,7 +1946,8 @@ class ModernLisAnalysisApp(ctk.CTk):
             f"Pasta de saida: {summary.output_dir}",
             (
                 f"Total: {summary.total_runs} | Sucessos: {summary.success_count} | "
-                f"Falhas: {summary.failure_count} | Canceladas: {summary.cancelled_count}"
+                f"Falhas: {summary.failure_count} | Canceladas: {summary.cancelled_count} | "
+                f"Ignoradas: {summary.skipped_count}"
             ),
         ]
 
@@ -1950,11 +1968,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         return "\n".join(lines)
 
     def _on_atp_parameter_sweep_finished(self, summary):
-        final_progress = min(1.0, len(summary.results) / max(1, summary.total_runs))
+        final_progress = min(1.0, summary.processed_count / max(1, summary.total_runs))
         completed_all = (
             not summary.cancelled
             and not summary.stopped_on_error
-            and len(summary.results) == summary.total_runs
+            and summary.processed_count == summary.total_runs
         )
         elapsed = self._set_atp_feedback_finished(success=completed_all, final_progress=final_progress)
         summary_text = self._format_atp_sweep_summary(summary)
@@ -2091,6 +2109,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         }
 
         self._atp_cancel_event.clear()
+        self._atp_sweep_completed_runs.clear()
         self.atp_batch_progress_var.set(f"0 / {len(sweep_values)}")
         self.atp_batch_elapsed_var.set("0s")
         self.atp_batch_status_var.set("Preparando sweep")
@@ -2104,6 +2123,15 @@ class ModernLisAnalysisApp(ctk.CTk):
             element_name=str(selected_row.get("element_name", "element")),
             label=selected_label,
         )
+
+        cpu_count = os.cpu_count() or 1
+        parallel_runs = 1
+        if self.parallel_process_var.get():
+            parallel_runs = min(
+                len(sweep_values),
+                max(1, min(4, (cpu_count + 1) // 2)),
+            )
+        self._atp_sweep_parallel_active = parallel_runs > 1
 
         def worker():
             def report_progress(message: str):
@@ -2125,14 +2153,6 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             try:
                 _ensure_pipeline_imports()
-                cpu_count = os.cpu_count() or 1
-                parallel_runs = 1
-                if self.parallel_process_var.get():
-                    parallel_runs = min(
-                        len(sweep_values),
-                        max(1, min(4, (cpu_count + 1) // 2)),
-                    )
-
                 summary = run_parameter_sweep(
                     base_atp_path=atp_file,
                     parameter_id=parameter_ref,

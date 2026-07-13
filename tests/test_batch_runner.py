@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -261,6 +262,86 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 self.assertTrue(result.atp_path.exists())
                 self.assertTrue(result.lis_path.exists())
                 self.assertAlmostEqual(self._read_branch_resistance(result.atp_path), expected_value)
+
+
+    def test_cancel_marks_unstarted_runs_and_reports_partial_progress(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            self._create_base_atp(base_atp)
+            branch = parse_atp_file(base_atp)[0]
+            cancel_event = threading.Event()
+            events: list[dict] = []
+
+            def fake_solver(atp_file_path: str, **_kwargs) -> str:
+                lis_path = Path(atp_file_path).with_suffix(".lis")
+                lis_path.write_text("OK\n", encoding="latin-1")
+                return str(lis_path)
+
+            def on_event(event: dict) -> None:
+                events.append(event)
+                if event.get("type") == "run_succeeded":
+                    cancel_event.set()
+
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id={"line_index": branch["line_index"], "parameter": "resistance"},
+                start=5,
+                stop=15,
+                step=5,
+                output_dir=root / "out",
+                solver_runner=fake_solver,
+                cancel_event=cancel_event,
+                event_callback=on_event,
+            )
+
+            self.assertTrue(summary.cancelled)
+            self.assertEqual(
+                [result.status for result in summary.results],
+                ["success", "cancelled", "cancelled"],
+            )
+            self.assertEqual(summary.processed_count, 1)
+            self.assertEqual(summary.cancelled_count, 2)
+            self.assertAlmostEqual(events[-1]["progress"], 1 / 3)
+
+    def test_parallel_solver_serializes_lis_postprocessing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            self._create_base_atp(base_atp)
+            branch = parse_atp_file(base_atp)[0]
+            state_lock = threading.Lock()
+            active_parsers = 0
+            maximum_active_parsers = 0
+
+            def fake_solver(atp_file_path: str, **_kwargs) -> str:
+                lis_path = Path(atp_file_path).with_suffix(".lis")
+                lis_path.write_text("OK\n", encoding="latin-1")
+                return str(lis_path)
+
+            def guarded_parser(*_args):
+                nonlocal active_parsers, maximum_active_parsers
+                with state_lock:
+                    active_parsers += 1
+                    maximum_active_parsers = max(maximum_active_parsers, active_parsers)
+                time.sleep(0.03)
+                with state_lock:
+                    active_parsers -= 1
+
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id={"line_index": branch["line_index"], "parameter": "resistance"},
+                start=5,
+                stop=20,
+                step=5,
+                output_dir=root / "out",
+                solver_runner=fake_solver,
+                lis_parser=guarded_parser,
+                max_parallel_runs=4,
+            )
+
+            self.assertEqual(summary.success_count, 4)
+            self.assertEqual(maximum_active_parsers, 1)
 
 
 if __name__ == "__main__":

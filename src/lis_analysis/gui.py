@@ -71,8 +71,17 @@ def calcular_risco(H, D, S, N, d, n, V50, sigma_s):
     V50 = float(V50)
     sigma_s = float(sigma_s)
 
+    valores = [H, D, S, N, d, n, V50, sigma_s]
+    if not all(math.isfinite(valor) for valor in valores):
+        raise ValueError("Todos os parametros do risco devem ser finitos.")
     if D <= 0 or d <= 0 or n <= 0:
         raise ValueError("D, d e n devem ser maiores que zero.")
+    if H <= 0 or S < 0 or N <= 0:
+        raise ValueError("H, S e N devem ser positivos.")
+    if not N.is_integer():
+        raise ValueError("N deve ser inteiro.")
+    if not n.is_integer():
+        raise ValueError("n deve ser inteiro.")
     if sigma_s < 0:
         raise ValueError("sigma_s nao pode ser negativo.")
 
@@ -88,7 +97,7 @@ def calcular_risco(H, D, S, N, d, n, V50, sigma_s):
     sigma_f = 0.06 * cfo
 
     raiz_5n = sqrt(5.0 * n)
-    cfo_n = cfo * (1.0 - 4.0 * (sigma_f / cfo) * (1.0 - 1.0 / raiz_5n))
+    cfo_n = cfo * (1.0 - 4.0 * 0.06 * (1.0 - 1.0 / raiz_5n))
     sigma_fn = sigma_f / raiz_5n
 
     z = (cfo_n - V50) / sqrt((sigma_fn ** 2) + (sigma_s ** 2))
@@ -250,6 +259,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.chain_length_var = tk.DoubleVar(value=2)  # valor padrão: 2
         self.gaps_var = tk.DoubleVar(value=4)  # valor padrão: 4
         self.enable_risk_var = tk.BooleanVar(value=False)
+        self.risk_status_var = tk.StringVar(value="Risco de falha desativado")
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -592,6 +602,13 @@ class ModernLisAnalysisApp(ctk.CTk):
             command=self._toggle_tower_inputs
         ).pack(anchor="w", padx=15, pady=(0, 12))
 
+        ctk.CTkLabel(
+            advanced_card,
+            textvariable=self.risk_status_var,
+            font=ctk.CTkFont(size=11),
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 8))
+
         self.risk_inputs_frame = ctk.CTkFrame(advanced_card, fg_color="transparent")
         self.risk_inputs_frame.pack(fill="x", padx=15, pady=(0, 15))
 
@@ -639,10 +656,11 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _toggle_tower_inputs(self):
         """Mostra ou oculta os campos do cálculo de risco e habilita sua edição."""
+        enabled = bool(self.enable_risk_var.get())
         frame = getattr(self, "risk_inputs_frame", None)
         if frame is not None:
             try:
-                if self.enable_risk_var.get():
+                if enabled:
                     if not frame.winfo_ismapped():
                         frame.pack(fill="x", padx=15, pady=(0, 15))
                 else:
@@ -651,7 +669,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             except Exception:
                 pass
 
-        state = "normal" if self.enable_risk_var.get() else "disabled"
+        state = "normal" if enabled else "disabled"
         for widget in [
             getattr(self, "height_entry", None),
             getattr(self, "distance_entry", None),
@@ -666,6 +684,68 @@ class ModernLisAnalysisApp(ctk.CTk):
                 widget.configure(state=state)
             except Exception:
                 pass
+
+        if enabled:
+            self.risk_status_var.set("Risco de falha ativado. Preencha os parâmetros e gere os gráficos para visualizar o valor estimado.")
+        else:
+            self.risk_status_var.set("Risco de falha desativado")
+
+    def _get_risk_inputs(self) -> dict[str, float] | None:
+        if not self.enable_risk_var.get():
+            return None
+
+        inputs = {
+            "H": self._parse_float_field(str(self.height_var.get()), "Altura do condutor (H)"),
+            "D": self._parse_float_field(str(self.distance_var.get()), "Distância condutor-estrutura (D)"),
+            "S": self._parse_float_field(str(self.width_var.get()), "Largura da torre (S)"),
+            "N": self._parse_float_field(str(self.subconductors_var.get()), "Número de subcondutores por fase (N)"),
+            "d": self._parse_float_field(str(self.chain_length_var.get()), "Comprimento da cadeia / d (d)"),
+            "n": self._parse_float_field(str(self.gaps_var.get()), "Número de gaps em paralelo (n)"),
+        }
+
+        if inputs["N"] <= 0 or inputs["n"] <= 0:
+            raise ValueError("N e n devem ser maiores que zero.")
+        if not float(inputs["N"]).is_integer():
+            raise ValueError("N deve ser inteiro.")
+        if not float(inputs["n"]).is_integer():
+            raise ValueError("n deve ser inteiro.")
+
+        return inputs
+
+    def _compute_risk_context(self, mu: float, sigma: float) -> dict[str, object] | None:
+        inputs = self._get_risk_inputs()
+        if inputs is None:
+            return None
+
+        risk = calcular_risco(
+            inputs["H"],
+            inputs["D"],
+            inputs["S"],
+            inputs["N"],
+            inputs["d"],
+            inputs["n"],
+            mu,
+            sigma,
+        )
+
+        return {
+            "risk": float(risk),
+            "inputs": inputs,
+            "mu": float(mu),
+            "sigma": float(sigma),
+        }
+
+    def _format_risk_context_text(self, risk_context: dict[str, object]) -> str:
+        risk = float(risk_context["risk"])
+        inputs = risk_context["inputs"]
+        mu = float(risk_context["mu"])
+        sigma = float(risk_context["sigma"])
+        return (
+            f"Risco de falha: {risk:.3e} ({risk * 100:.2f}%)\n"
+            f"V50 = {mu:.6g} | sigma_s = {sigma:.6g}\n"
+            f"H={inputs['H']:.3g}  D={inputs['D']:.3g}  S={inputs['S']:.3g}\n"
+            f"N={int(inputs['N'])}  d={inputs['d']:.3g}  n={int(inputs['n'])}"
+        )
 
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
@@ -3357,37 +3437,35 @@ class ModernLisAnalysisApp(ctk.CTk):
             
             x, y, mu, sigma = res
 
-            risk = None
+            risk_context = None
             if getattr(self, "enable_risk_var", None) is not None and self.enable_risk_var.get():
                 try:
-                    H = float(self.height_var.get())
-                    D = float(self.distance_var.get())
-                    S = float(self.width_var.get())
-                    N = float(self.subconductors_var.get())
-                    d = float(self.chain_length_var.get())
-                    n = float(self.gaps_var.get())
-                    V50 = float(mu)
-                    sigma_s = float(sigma)
-                    self.log(
-                        f"[Risco] Calculando com H={H}, D={D}, S={S}, N={N}, d={d}, n={n}, V50={V50}, sigma_s={sigma_s}"
-                    )
-                    risk = calcular_risco(H, D, S, N, d, n, V50, sigma_s)
-                    self.log(f"[Risco] Risco calculado: {risk:.6e}")
+                    risk_context = self._compute_risk_context(mu, sigma)
+                    if risk_context is not None:
+                        inputs = risk_context["inputs"]
+                        self.log(
+                            "[Risco] Calculando com "
+                            f"H={inputs['H']}, D={inputs['D']}, S={inputs['S']}, N={inputs['N']}, "
+                            f"d={inputs['d']}, n={inputs['n']}, V50={mu}, sigma_s={sigma}"
+                        )
+                        self.log(f"[Risco] Risco calculado: {float(risk_context['risk']):.6e}")
                 except Exception as exc:
                     self.log(f"[Risco] Nao foi possivel calcular o risco: {exc}")
-                    risk = None
+                    risk_context = None
 
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
-            if risk is not None:
+            if risk_context is not None:
                 ax.text(
                     0.5,
                     0.94,
-                    f"Risco de falha: {risk:.3e}",
+                    self._format_risk_context_text(risk_context),
                     ha="center",
                     va="center",
                     transform=ax.transAxes,
                     fontweight="bold",
+                    fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.45", fc="white", ec="0.4", alpha=0.9),
                 )
 
 # Barras de frequência
@@ -3528,6 +3606,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             # Criar figura
             fig, ax = plt.subplots(figsize=(14, 8))
             colors = plt.cm.tab10(range(len(series_data)))
+            risk_contexts = []
             
             # Preparar eixo secundário se curva acumulada estiver habilitada
             ax2 = None
@@ -3538,6 +3617,14 @@ class ModernLisAnalysisApp(ctk.CTk):
             
             for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
                 color = colors[idx]
+                risk_context = None
+                if getattr(self, "enable_risk_var", None) is not None and self.enable_risk_var.get():
+                    try:
+                        risk_context = self._compute_risk_context(mu, sigma)
+                        if risk_context is not None:
+                            risk_contexts.append((label, risk_context))
+                    except Exception as exc:
+                        self.log(f"[Risco] Nao foi possivel calcular o risco para {label}: {exc}")
                 
                 # Barras (histograma) - com transparência para não sobrepor muito
                 if plot_options.get('show_bars', True):
@@ -3609,11 +3696,31 @@ class ModernLisAnalysisApp(ctk.CTk):
                     mu_val = _safe_float(mu)
                     sigma_val = _safe_float(sigma)
                     stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
+                    for risk_label, risk_context in risk_contexts:
+                        if risk_label == label:
+                            stats_text += f"  risco={float(risk_context['risk']):.3e}"
+                            break
                 
                 bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
                 ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=8,
                        verticalalignment='top', horizontalalignment='left', 
                        bbox=bbox_props, family='monospace')
+
+            if risk_contexts and not plot_options.get('show_stats_box', True):
+                risk_lines = ["Risco de falha por arquivo:"]
+                for label, risk_context in risk_contexts:
+                    risk_lines.append(f"{label}: {float(risk_context['risk']):.3e} ({float(risk_context['risk']) * 100:.2f}%)")
+                ax.text(
+                    0.02,
+                    0.98,
+                    "\n".join(risk_lines),
+                    transform=ax.transAxes,
+                    fontsize=8,
+                    verticalalignment='top',
+                    horizontalalignment='left',
+                    bbox=dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92),
+                    family='monospace',
+                )
             
             # Salvar
             outdir = Path(outdir)

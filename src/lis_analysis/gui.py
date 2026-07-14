@@ -3571,10 +3571,10 @@ class ModernLisAnalysisApp(ctk.CTk):
                             return float('nan')
                     
                     stats_text = (
-                        f"μ = {_safe_float(mu):.6g}\\n"
-                        f"σ = {_safe_float(sigma):.6g}\\n"
-                        f"Mediana = {_safe_float(computed_stats.get('median', float('nan'))):.6g}\\n"
-                        f"CV = {_safe_float(computed_stats.get('cv', float('nan'))):.6g}\\n"
+                        f"μ = {_safe_float(mu):.6g}\n"
+                        f"σ = {_safe_float(sigma):.6g}\n"
+                        f"Mediana = {_safe_float(computed_stats.get('median', float('nan'))):.6g}\n"
+                        f"CV = {_safe_float(computed_stats.get('cv', float('nan'))):.6g}\n"
                         f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
                     )
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)

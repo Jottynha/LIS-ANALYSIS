@@ -3578,7 +3578,8 @@ class ModernLisAnalysisApp(ctk.CTk):
                         f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
                     )
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
-                    ax.text(0.98, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+                    stats_y = 0.74 if risk_result is not None else 0.95
+                    ax.text(0.98, stats_y, stats_text, transform=ax.transAxes, fontsize=9,
                             verticalalignment='top', horizontalalignment='right', bbox=bbox_props)
                 except Exception:
                     pass
@@ -3596,24 +3597,30 @@ class ModernLisAnalysisApp(ctk.CTk):
             outdir.mkdir(parents=True, exist_ok=True)
             out_png = outdir / output_name
             
-            bottom_margin = 0.02
             if risk_result is not None:
-                bottom_margin = 0.075
-                fig.text(
-                    0.5,
-                    0.018,
+                ax.text(
+                    0.98,
+                    0.96,
                     (
-                        f"Risco de falha: {risk_result.risk * 100.0:.6g}%  "
-                        f"(R = {risk_result.risk:.3e})"
+                        f"Risco de falha: {risk_result.risk * 100.0:.6g}%\n"
+                        f"R = {risk_result.risk:.3e}"
                     ),
-                    ha="center",
-                    va="bottom",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
                     fontsize=9,
                     fontweight="bold",
                     color="#444444",
+                    zorder=20,
+                    bbox=dict(
+                        boxstyle="round,pad=0.5",
+                        facecolor="white",
+                        edgecolor="#666666",
+                        alpha=0.96,
+                    ),
                 )
 
-            fig.tight_layout(rect=(0, bottom_margin, 1, 1))
+            fig.tight_layout()
             fig.savefig(out_png, dpi=220, bbox_inches='tight')
             self.log(f"Gráfico salvo: {out_png.name}")
             

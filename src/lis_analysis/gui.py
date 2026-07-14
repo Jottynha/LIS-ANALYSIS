@@ -3487,6 +3487,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 return
             
             x, y, mu, sigma = res
+            risk_result = None
+            risk_config = plot_options.get("risk_config")
+            if risk_config is not None:
+                try:
+                    risk_result = calculate_failure_risk(float(mu), float(sigma), risk_config)
+                except Exception:
+                    pass
             
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
@@ -3589,8 +3596,25 @@ class ModernLisAnalysisApp(ctk.CTk):
             outdir.mkdir(parents=True, exist_ok=True)
             out_png = outdir / output_name
             
-            plt.tight_layout()
-            plt.savefig(out_png, dpi=220, bbox_inches='tight')
+            bottom_margin = 0.02
+            if risk_result is not None:
+                bottom_margin = 0.075
+                fig.text(
+                    0.5,
+                    0.018,
+                    (
+                        f"Risco de falha: {risk_result.risk * 100.0:.6g}%  "
+                        f"(R = {risk_result.risk:.3e})"
+                    ),
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    fontweight="bold",
+                    color="#444444",
+                )
+
+            fig.tight_layout(rect=(0, bottom_margin, 1, 1))
+            fig.savefig(out_png, dpi=220, bbox_inches='tight')
             self.log(f"Gráfico salvo: {out_png.name}")
             
             if mostrar:

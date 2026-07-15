@@ -3,6 +3,7 @@ from pathlib import Path
 from lis_analysis.solver.atp_runner import (
     ATP_DIRECT_SUPPORT_FILES,
     _cleanup_direct_solver_support,
+    _discover_atp_executables,
     _lis_has_completion_marker,
     _stage_direct_solver_support,
 )
@@ -88,3 +89,18 @@ def test_direct_solver_support_rolls_back_partial_copy(tmp_path: Path):
         raise AssertionError("missing support file should fail")
 
     assert not (working_dir / first).exists()
+
+
+def test_discovers_executables_in_nonstandard_atp_root(tmp_path: Path):
+    root = tmp_path / "custom-atp"
+    wrapper = root / "tools" / "runATP.exe"
+    direct = root / "atpmingw" / "tpbig.exe"
+    wrapper.parent.mkdir(parents=True)
+    direct.parent.mkdir(parents=True)
+    wrapper.write_bytes(b"wrapper")
+    direct.write_bytes(b"solver")
+
+    found_wrapper, found_direct = _discover_atp_executables([root])
+
+    assert found_wrapper == wrapper
+    assert found_direct == direct

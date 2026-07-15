@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -8,9 +9,9 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
-ATP_DIRECT_EXECUTABLE = Path(r"C:\ATP\atpmingw\tpbig.exe")
-ATP_DIRECT_SUPPORT_DIR = ATP_DIRECT_EXECUTABLE.parent
+DEFAULT_ATP_ROOT = Path(r"C:\ATP")
+ATP_EXECUTABLE = str(DEFAULT_ATP_ROOT / "tools" / "runATP.exe")
+ATP_DIRECT_EXECUTABLE = DEFAULT_ATP_ROOT / "atpmingw" / "tpbig.exe"
 ATP_DIRECT_SUPPORT_FILES = (
     "startup",
     "graphics",
@@ -20,6 +21,106 @@ ATP_DIRECT_SUPPORT_FILES = (
 )
 LIS_TAIL_READ_BYTES = 64 * 1024
 
+
+
+def _windows_registry_atp_roots() -> list[Path]:
+    if os.name != "nt":
+        return []
+
+    try:
+        import winreg
+    except ImportError:
+        return []
+
+    roots: list[Path] = []
+    views = [
+        getattr(winreg, "KEY_WOW64_32KEY", 0),
+        getattr(winreg, "KEY_WOW64_64KEY", 0),
+    ]
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in views:
+            try:
+                with winreg.OpenKey(
+                    hive,
+                    r"SOFTWARE\ATPINST",
+                    0,
+                    winreg.KEY_READ | view,
+                ) as key:
+                    value, _kind = winreg.QueryValueEx(key, "")
+                if value:
+                    roots.append(Path(str(value)))
+            except OSError:
+                continue
+    return roots
+
+
+def _normalize_atp_root(path: Path) -> Path:
+    if path.name.lower() in {"atpmingw", "tools"}:
+        return path.parent
+    return path
+
+
+def _candidate_atp_roots() -> list[Path]:
+    candidates: list[Path] = []
+    for variable in ("ATP_HOME", "ATPINST", "ATPDIR"):
+        value = os.environ.get(variable)
+        if value:
+            candidates.append(Path(value))
+
+    candidates.extend(_windows_registry_atp_roots())
+    candidates.append(Path(ATP_EXECUTABLE).parent.parent)
+    candidates.append(DEFAULT_ATP_ROOT)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_atp_root(candidate)
+        key = str(normalized).rstrip("\\/").lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(normalized)
+    return unique
+
+
+def _discover_atp_executables(
+    candidate_roots: Optional[list[Path]] = None,
+) -> tuple[Optional[Path], Optional[Path]]:
+    wrapper = None
+    direct = None
+
+    if candidate_roots is None:
+        explicit_wrapper = os.environ.get("ATP_RUNATP")
+        explicit_direct = os.environ.get("ATP_TPBIG")
+        if explicit_wrapper and Path(explicit_wrapper).is_file():
+            wrapper = Path(explicit_wrapper)
+        if explicit_direct and Path(explicit_direct).is_file():
+            direct = Path(explicit_direct)
+        roots = _candidate_atp_roots()
+    else:
+        roots = [_normalize_atp_root(Path(root)) for root in candidate_roots]
+
+    for root in roots:
+        if wrapper is None:
+            candidate = root / "tools" / "runATP.exe"
+            if candidate.is_file():
+                wrapper = candidate
+        if direct is None:
+            candidate = root / "atpmingw" / "tpbig.exe"
+            if candidate.is_file():
+                direct = candidate
+        if wrapper is not None and direct is not None:
+            break
+
+    if wrapper is None:
+        located = shutil.which("runATP.exe")
+        if located:
+            wrapper = Path(located)
+    if direct is None:
+        located = shutil.which("tpbig.exe")
+        if located:
+            direct = Path(located)
+
+    return wrapper, direct
 
 def _adaptive_poll_interval(idle_seconds: float) -> float:
     """Define o intervalo de polling com backoff progressivo em periodos ociosos."""
@@ -116,7 +217,7 @@ def _lis_has_completion_marker(lis_path: Path) -> bool:
 
 def _stage_direct_solver_support(
     working_directory: Path,
-    support_directory: Path = ATP_DIRECT_SUPPORT_DIR,
+    support_directory: Path,
 ) -> list[Path]:
     """Copia apenas suportes ausentes e retorna os arquivos que devem ser removidos."""
     copied: list[Path] = []
@@ -298,19 +399,28 @@ def run_atp_solver(
                 pass
 
     _notify("===== ATP SIMULATION START =====")
+    wrapper_executable, direct_executable = _discover_atp_executables()
     direct_support_files: list[Path] = []
     use_direct_solver = False
-    if ATP_DIRECT_EXECUTABLE.is_file():
+    if direct_executable is not None:
         try:
-            direct_support_files = _stage_direct_solver_support(working_directory)
+            direct_support_files = _stage_direct_solver_support(
+                working_directory,
+                direct_executable.parent,
+            )
             use_direct_solver = True
         except Exception as exc:
             _notify(f"Direct ATP unavailable ({exc}). Falling back to runATP.exe.")
 
-    solver_command = [ATP_EXECUTABLE, atp_name]
+    # Mantem compatibilidade com integracoes que interceptam o processo e
+    # transforma a falha real ao iniciar em uma mensagem de configuracao clara.
+    if wrapper_executable is None:
+        wrapper_executable = Path(ATP_EXECUTABLE)
+
+    solver_command = [str(wrapper_executable), atp_name]
     if use_direct_solver:
         solver_command = [
-            str(ATP_DIRECT_EXECUTABLE),
+            str(direct_executable),
             "DISK",
             atp_name,
             "s",
@@ -333,6 +443,12 @@ def run_atp_solver(
             text=True,
             bufsize=1,
         )
+    except FileNotFoundError as exc:
+        _cleanup_direct_solver_support(direct_support_files)
+        raise FileNotFoundError(
+            "Executavel ATP nao encontrado. Instale o ATP ou configure ATP_HOME, "
+            "ATP_TPBIG ou ATP_RUNATP."
+        ) from exc
     except Exception:
         _cleanup_direct_solver_support(direct_support_files)
         raise

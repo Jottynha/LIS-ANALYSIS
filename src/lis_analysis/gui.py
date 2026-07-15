@@ -199,6 +199,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._log_max_lines = 3000
         self._log_trim_every = 20
         self._log_entries_since_trim = 0
+        self._appearance_mode_preference = "System"
 
         # Risco de falha - valores de referencia do artigo SBSE 2025.
         self.enable_risk_var = tk.BooleanVar(value=False)
@@ -324,6 +325,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 
                 # Carregar tema
                 appearance = data.get('appearance_mode', 'System')
+                self._appearance_mode_preference = appearance
                 ctk.set_appearance_mode(appearance)
         except Exception:
             pass
@@ -354,7 +356,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'plot_gaussian': self.plot_gaussian_var.get(),
                 'plot_cumulative': self.plot_cumulative_var.get(),
                 'plot_stats_box': self.plot_stats_box_var.get(),
-                'appearance_mode': ctk.get_appearance_mode(),
+                'appearance_mode': self._appearance_mode_preference,
             }
             PREFS_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
         except Exception:
@@ -378,7 +380,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.tabview.add("Configurações")
         self.tabview.add("Análise .lis")
         self.tabview.add("Simulação ATP")
-        self.tabview.add("Logs")
+        self.tabview.add("Registros")
         
         # Popular cada aba
         self._build_config_tab()
@@ -402,7 +404,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         title_label.pack(side="left", padx=10)
         
-        # Toggle de tema (Dark/Light)
+        # Seletor de tema (escuro/claro)
         theme_frame = ctk.CTkFrame(header, fg_color="transparent")
         theme_frame.pack(side="right", padx=10)
         
@@ -410,16 +412,27 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         theme_menu = ctk.CTkOptionMenu(
             theme_frame,
-            values=["System", "Light", "Dark"],
+            values=["Sistema", "Claro", "Escuro"],
             command=self._change_appearance_mode,
             width=120
         )
-        theme_menu.set(ctk.get_appearance_mode())
+        displayed_mode = {
+            "System": "Sistema",
+            "Light": "Claro",
+            "Dark": "Escuro",
+        }.get(self._appearance_mode_preference, "Sistema")
+        theme_menu.set(displayed_mode)
         theme_menu.pack(side="left")
     
     def _change_appearance_mode(self, new_mode: str):
         """Altera o tema (claro/escuro)"""
-        ctk.set_appearance_mode(new_mode)
+        internal_mode = {
+            "Sistema": "System",
+            "Claro": "Light",
+            "Escuro": "Dark",
+        }.get(new_mode, new_mode)
+        self._appearance_mode_preference = internal_mode
+        ctk.set_appearance_mode(internal_mode)
         self._save_prefs()
     
     def _build_config_tab(self):
@@ -491,7 +504,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkCheckBox(col1, text="Mostrar gráficos", variable=self.show_plots_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(col1, text="Abrir pasta de saída", variable=self.open_output_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(col1, text="Só gráfico comparativo", variable=self.only_comparative_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(col1, text="Salvar logs", variable=self.save_logs_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(col1, text="Salvar registros", variable=self.save_logs_var).pack(anchor="w", pady=5)
         
         # Coluna 2
         col2 = ctk.CTkFrame(checks_frame, fg_color="transparent")
@@ -522,7 +535,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         plot_col1.pack(side="left", fill="both", expand=True, padx=(0, 10))
         
         ctk.CTkCheckBox(plot_col1, text="Barras (histograma)", variable=self.plot_bars_var).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(plot_col1, text="Pontos (scatter)", variable=self.plot_points_var).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(plot_col1, text="Pontos (dispersão)", variable=self.plot_points_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(plot_col1, text="Curva gaussiana", variable=self.plot_gaussian_var).pack(anchor="w", pady=5)
         
         plot_col2 = ctk.CTkFrame(plot_checks_frame, fg_color="transparent")
@@ -764,7 +777,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkButton(
             params_actions,
-            text="Resetar alterações",
+            text="Restaurar alterações",
             command=self._reset_atp_parameter_changes,
             width=170,
             fg_color="#757575",
@@ -796,7 +809,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             filter_row,
             width=320,
             textvariable=self.atp_param_filter_var,
-            placeholder_text="Ex.: X0001A, resistência, branch...",
+            placeholder_text="Ex.: X0001A, resistência, linha...",
         )
         filter_entry.pack(side="left", fill="x", expand=True)
 
@@ -819,7 +832,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             sweep_card,
-            text="Execução em lote (parameter sweep)",
+            text="Execução em lote (variação de parâmetros)",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
@@ -834,7 +847,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         sweep_grid.grid_columnconfigure(1, weight=1)
         sweep_grid.grid_columnconfigure(3, weight=1)
 
-        ctk.CTkLabel(sweep_grid, text="Parâmetro do sweep:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        ctk.CTkLabel(sweep_grid, text="Parâmetro da execução em lote:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
         self.atp_sweep_parameter_menu = ctk.CTkOptionMenu(
             sweep_grid,
             values=["Nenhum parâmetro carregado"],
@@ -992,8 +1005,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         return report_path
 
     def _build_logs_tab(self):
-        """Aba de Logs"""
-        tab = self.tabview.tab("Logs")
+        """Aba de Registros"""
+        tab = self.tabview.tab("Registros")
         
         # Toolbar
         toolbar = ctk.CTkFrame(tab, fg_color="transparent")
@@ -1001,7 +1014,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             toolbar, 
-            text="Limpar Logs", 
+            text="Limpar Registros",
             command=self._clear_logs,
             width=120,
             fg_color="#f44336",
@@ -1010,7 +1023,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             toolbar, 
-            text="Salvar Logs", 
+            text="Salvar Registros",
             command=self._save_logs_to_file,
             width=120
         ).pack(side="left", padx=10)
@@ -1695,9 +1708,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         group_titles = {
-            "branch": "BRANCHES",
-            "switch": "SWITCHES",
-            "source": "SOURCES",
+            "branch": "BRANCH (Linhas)",
+            "switch": "SWITCH (Chaves)",
+            "source": "SOURCE (Fontes)",
         }
         grouped_elements = {"branch": [], "switch": [], "source": []}
 
@@ -2129,7 +2142,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         message = str(event.get("message", "")).strip()
         if message:
             if event_type != "solver_progress":
-                self.log(f"[ATP-SWEEP] {message}")
+                self.log(f"[ATP-LOTE] {message}")
             self.atp_batch_status_var.set(message)
             self._atp_runtime_status_text = message
 
@@ -2190,7 +2203,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             else "Nenhum resultado preservado"
         )
         lines = [
-            f"Sweep finalizado em {summary.elapsed_seconds:.1f}s",
+            f"Execução em lote finalizada em {summary.elapsed_seconds:.1f}s",
             f"Parâmetro: {summary.parameter.display_label}",
             f"Pasta de saída: {output_label}",
             (
@@ -2207,7 +2220,15 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         lines.append("")
         for result in summary.results:
-            line = f"{result.run_index:03d} | valor={result.value:g} | {result.status.upper()}"
+            status_label = {
+                "pending": "PENDENTE",
+                "solver_completed": "SOLVER CONCLUÍDO",
+                "cancelled": "CANCELADA",
+                "failed": "FALHA",
+                "success": "SUCESSO",
+                "skipped": "IGNORADA",
+            }.get(result.status, result.status.upper())
+            line = f"{result.run_index:03d} | valor={result.value:g} | {status_label}"
             if result.lis_path:
                 line += f" | LIS={result.lis_path}"
             if result.error:
@@ -2241,36 +2262,36 @@ class ModernLisAnalysisApp(ctk.CTk):
         if risk_records:
             self._write_failure_risk_report(
                 summary.output_dir,
-                "Sweep ATP",
+                "Execução em lote ATP",
                 risk_records,
             )
 
         if summary.cancelled:
-            self.status_var.set("Sweep cancelado")
-            self.atp_batch_status_var.set("Sweep cancelado")
+            self.status_var.set("Execução em lote cancelada")
+            self.atp_batch_status_var.set("Execução em lote cancelada")
             self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
         elif summary.failure_count > 0:
-            self.status_var.set("Sweep concluído com falhas")
-            self.atp_batch_status_var.set("Sweep concluído com falhas")
+            self.status_var.set("Execução em lote concluída com falhas")
+            self.atp_batch_status_var.set("Execução em lote concluída com falhas")
             self.atp_run_status_var.set(f"Status: concluído com falhas ({elapsed:.1f}s)")
         else:
-            self.status_var.set("Sweep concluído")
-            self.atp_batch_status_var.set("Sweep concluído")
+            self.status_var.set("Execução em lote concluída")
+            self.atp_batch_status_var.set("Execução em lote concluída")
             self.atp_run_status_var.set(f"Status: concluído ({elapsed:.1f}s)")
 
         self.log(
-            f"[ATP-SWEEP] Resumo final: {summary.success_count} sucesso(s), "
+            f"[ATP-LOTE] Resumo final: {summary.success_count} sucesso(s), "
             f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s)"
         )
 
         if self.save_logs_var.get() and summary.output_dir.exists():
             try:
-                log_file = summary.output_dir / f"log_sweep_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
+                log_file = summary.output_dir / f"log_lote_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
                 log_content = self.log_textbox.get("1.0", "end")
                 log_file.write_text(log_content, encoding="utf-8")
-                self.log(f"[ATP-SWEEP] Log salvo: {log_file.name}")
+                self.log(f"[ATP-LOTE] Log salvo: {log_file.name}")
             except Exception as exc:
-                self.log(f"[ATP-SWEEP] Aviso: não foi possível salvar log do sweep: {exc}")
+                self.log(f"[ATP-LOTE] Aviso: não foi possível salvar log da execução em lote: {exc}")
 
         if self.open_output_var.get() and summary.output_dir.exists():
             _open_in_file_manager(summary.output_dir)
@@ -2282,13 +2303,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 else "Nenhum resultado preservado"
             )
             self._show_warning(
-                "Sweep cancelado",
-                f"O sweep foi interrompido após {summary.processed_count} execução(ões) concluída(s).",
+                "Execução em lote cancelada",
+                f"A execução em lote foi interrompida após {summary.processed_count} execução(ões) concluída(s).",
                 details=[("Resultados", preserved_output)],
             )
         elif summary.failure_count > 0:
             self._show_warning(
-                "Sweep concluído com falhas",
+                "Execução em lote concluída com falhas",
                 (
                     f"{summary.success_count} execução(ões) concluída(s) e "
                     f"{summary.failure_count} falha(s)."
@@ -2297,7 +2318,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             )
         else:
             self._show_success(
-                "Sweep concluído",
+                "Execução em lote concluída",
                 f"{summary.success_count} execução(ões) concluída(s) com sucesso.",
                 details=[("Resultados", str(summary.output_dir))],
             )
@@ -2320,7 +2341,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         selected_label = self.atp_sweep_parameter_var.get().strip()
         selected_row = self._atp_sweep_parameter_options.get(selected_label)
         if selected_row is None:
-            self._show_error("Erro", "Selecione um parâmetro válido para o sweep.")
+            self._show_error("Erro", "Selecione um parâmetro válido para a execução em lote.")
             return
 
         missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
@@ -2330,7 +2351,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 details.append((f"Linha {line_no}", target))
             self._show_error(
                 "Dependências ATP ausentes",
-                "Não é possível iniciar o sweep. Arquivo(s) auxiliar(es) de $INSERT não encontrado(s).",
+                "Não é possível iniciar a execução em lote. Arquivo(s) auxiliar(es) de $INSERT não encontrado(s).",
                 details=details,
             )
             return
@@ -2350,7 +2371,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             confirm = messagebox.askyesno(
                 "Ignorar alterações manuais",
                 (
-                    "A execução em lote altera somente o parâmetro selecionado para o sweep.\n\n"
+                    "A execução em lote altera somente o parâmetro selecionado para a execução em lote.\n\n"
                     "As alterações manuais pendentes no editor ATP serão ignoradas nesta execução.\n\n"
                     "Deseja continuar?"
                 ),
@@ -2365,7 +2386,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             sweep_values = generate_sweep_values(start, stop, step)
             risk_config = self._collect_risk_config()
         except Exception as exc:
-            self._show_error("Erro", "Configuração inválida para o sweep.", details=[("Detalhes", str(exc))])
+            self._show_error("Erro", "Configuração inválida para a execução em lote.", details=[("Detalhes", str(exc))])
             return
 
         show_plots = self.show_plots_var.get()
@@ -2387,10 +2408,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_sweep_run_progress.clear()
         self.atp_batch_progress_var.set(f"0 / {len(sweep_values)}")
         self.atp_batch_elapsed_var.set("0s")
-        self.atp_batch_status_var.set("Preparando sweep")
+        self.atp_batch_status_var.set("Preparando execução em lote")
         self._set_atp_feedback_running(mode="batch", total_runs=len(sweep_values))
-        self.status_var.set("Executando sweep ATP...")
-        self._update_simulation_results("Executando sweep ATP em background... aguarde.\n")
+        self.status_var.set("Executando lote ATP...")
+        self._update_simulation_results("Executando lote ATP em segundo plano... aguarde.\n")
 
         parameter_ref = SweepParameterRef(
             line_index=int(selected_row["line_index"]),
@@ -2596,12 +2617,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.delete("1.0", "end")
         self.log_textbox.configure(state="disabled")
         self._log_entries_since_trim = 0
-        self.log("Logs limpos")
+        self.log("Registros limpos")
 
     def _save_logs_to_file(self):
-        """Salvar logs em arquivo"""
+        """Salvar registros em arquivo"""
         file = filedialog.asksaveasfilename(
-            title="Salvar logs",
+            title="Salvar registros",
             defaultextension=".txt",
             filetypes=[("Arquivo de texto", "*.txt"), ("Todos", "*.*")]
         )
@@ -2609,9 +2630,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             try:
                 content = self.log_textbox.get("1.0", "end")
                 Path(file).write_text(content, encoding='utf-8')
-                self._show_success("Sucesso", "Logs salvos com sucesso.", details=[("Arquivo", file)])
+                self._show_success("Sucesso", "Registros salvos com sucesso.", details=[("Arquivo", file)])
             except Exception as e:
-                self._show_error("Erro", "Falha ao salvar logs.", details=[("Detalhes", str(e))])
+                self._show_error("Erro", "Falha ao salvar registros.", details=[("Detalhes", str(e))])
     
     def log(self, message: str):
         """Adiciona mensagem ao log"""
@@ -2809,7 +2830,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._show_styled_dialog(title, message, level="error", details=details)
 
     def _run_atp_simulation(self):
-        """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
+        """Executa o solver ATP em segundo plano e atualiza a GUI ao finalizar."""
         if self._atp_running:
             self._show_info("Simulação ATP", "Já existe uma simulação ATP em andamento.")
             return
@@ -2912,7 +2933,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 import shutil
 
                 if atp_overrides:
-                    report_progress("Applying ATP parameter overrides...")
+                    report_progress("Aplicando alterações nos parâmetros ATP...")
                     elements = parse_atp_file_cached(execution_atp_path)
                     original_lines = _read_text_lines_preserve_newlines(execution_atp_path)
                     for override in atp_overrides:
@@ -2940,9 +2961,9 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                     write_atp_file(elements, original_lines, parametrized_exec_atp)
                     execution_atp_path = parametrized_exec_atp
-                    report_progress(f"Parameterized ATP ready: {execution_atp_path.name}")
+                    report_progress(f"Arquivo ATP parametrizado pronto: {execution_atp_path.name}")
 
-                report_progress("Running ATP solver...")
+                report_progress("Executando o solver ATP...")
                 generated_lis_path = Path(
                     run_atp_solver(
                         str(execution_atp_path),
@@ -2956,7 +2977,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if self._atp_cancel_event.is_set():
                     raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
-                report_progress("Preparing output folder...")
+                report_progress("Preparando a pasta de resultados...")
                 base_outdir = Path(outdir_str)
                 base_outdir.mkdir(parents=True, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -3012,7 +3033,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if self._atp_cancel_event.is_set():
                     raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
-                report_progress("Parsing LIS and generating tables...")
+                report_progress("Analisando o LIS e gerando tabelas...")
                 parsed = parse_lis_once(lis_target, verbose=False)
                 df, stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
                 excel_path = None
@@ -3020,7 +3041,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 risk_records = []
                 if df is None:
                     table_warning = "Tabela de distribuição de picos não encontrada no .lis gerado"
-                    report_progress(f"Warning: {table_warning}")
+                    report_progress(f"Aviso: {table_warning}")
                 else:
                     excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
                     save_df_to_excel_only(df, excel_path)
@@ -3031,7 +3052,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
                     except Exception as e:
                         if not hide_errors:
-                            report_progress(f"Warning: falha em estatísticas: {e}")
+                            report_progress(f"Aviso: falha em estatísticas: {e}")
 
                     if risk_config is not None and computed_stats is not None:
                         try:
@@ -3045,10 +3066,10 @@ class ModernLisAnalysisApp(ctk.CTk):
                             )
                         except Exception as exc:
                             if not hide_errors:
-                                report_progress(f"Warning: falha no cálculo de risco: {exc}")
+                                report_progress(f"Aviso: falha no cálculo de risco: {exc}")
 
                     if not only_comparative:
-                        report_progress("Generating chart from analyzed data...")
+                        report_progress("Gerando gráfico com os dados analisados...")
                         graph_name = f"grafico_{lis_target.stem}.png"
                         self._criar_grafico_customizado(
                             excel_path,
@@ -3058,12 +3079,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                             mostrar=show_plots,
                         )
                     else:
-                        report_progress("Skipping individual chart (only comparative option enabled).")
+                        report_progress("Gráfico individual ignorado porque somente o comparativo foi solicitado.")
 
                 if self._atp_cancel_event.is_set():
                     raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
-                report_progress("Processing time series...")
+                report_progress("Processando séries temporais...")
                 try:
                     time_series_df = parsed.time_series_df
                     if time_series_df is not None:
@@ -3078,7 +3099,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         )
                 except Exception as e:
                     if not hide_errors:
-                        report_progress(f"Warning: falha em séries temporais: {e}")
+                        report_progress(f"Aviso: falha em séries temporais: {e}")
 
                 if self._atp_cancel_event.is_set():
                     raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
@@ -3124,6 +3145,8 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _on_atp_progress_message(self, message: str):
         """Recebe mensagens de progresso do runner ATP no thread principal."""
         self.log(f"[ATP] {message}")
+        if message.startswith("[runATP]"):
+            return
         self.atp_batch_status_var.set(message)
         self._atp_runtime_status_text = message
 
@@ -3160,7 +3183,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             overrides_count = payload.get("applied_overrides", 0) if isinstance(payload, dict) else 0
             table_warning = payload.get("table_warning") if isinstance(payload, dict) else None
             risk_report_path = payload.get("risk_report_path") if isinstance(payload, dict) else None
-            self.status_var.set("Simulation completed")
+            self.status_var.set("Simulação concluída")
             self.atp_batch_progress_var.set("1 / 1")
             self.atp_batch_status_var.set("Simulação concluída")
             self.log(f"Simulação concluída. LIS gerado em: {lis_path}")
@@ -3172,9 +3195,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.log(f"Aviso: {table_warning}")
 
             self._update_simulation_results(
-                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(não informado)'}\nParameter overrides: {overrides_count}"
-                + (f"\nRisk report: {risk_report_path}" if risk_report_path else "")
-                + (f"\nWarning: {table_warning}" if table_warning else "")
+                f"Simulação concluída em {elapsed:.1f}s\nArquivo LIS: {lis_path}\nPasta de resultados: {outdir if outdir else '(não informado)'}\nParâmetros alterados: {overrides_count}"
+                + (f"\nRelatório de risco: {risk_report_path}" if risk_report_path else "")
+                + (f"\nAviso: {table_warning}" if table_warning else "")
             )
 
             if self.save_logs_var.get() and outdir:

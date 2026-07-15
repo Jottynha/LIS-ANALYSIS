@@ -109,13 +109,13 @@ def generate_sweep_values(start: float, stop: float, step: float) -> list[float]
     step_dec = _to_decimal(step)
 
     if step_dec == 0:
-        raise ValueError("step nao pode ser zero")
+        raise ValueError("O passo não pode ser zero")
 
     if start_dec < stop_dec and step_dec <= 0:
-        raise ValueError("step deve ser positivo quando start < stop")
+        raise ValueError("O passo deve ser positivo quando o início for menor que o fim")
 
     if start_dec > stop_dec and step_dec >= 0:
-        raise ValueError("step deve ser negativo quando start > stop")
+        raise ValueError("O passo deve ser negativo quando o início for maior que o fim")
 
     if start_dec == stop_dec:
         return [float(start_dec)]
@@ -133,7 +133,7 @@ def generate_sweep_values(start: float, stop: float, step: float) -> list[float]
         values.append(float(current))
         current += step_dec
     else:
-        raise RuntimeError("Sweep excedeu o limite de iteracoes; verifique start/stop/step")
+        raise RuntimeError("A execução em lote excedeu o limite de iterações; verifique início, fim e passo")
 
     return values
 
@@ -157,12 +157,12 @@ def run_parameter_sweep(
     """Executa sweep parametrico com opcao de isolamento/paralelismo por run."""
     base_path = Path(base_atp_path)
     if not base_path.exists():
-        raise FileNotFoundError(f"Arquivo .atp nao encontrado: {base_path}")
+        raise FileNotFoundError(f"Arquivo .atp não encontrado: {base_path}")
 
     parameter_ref = _normalize_parameter_ref(parameter_id)
     values = generate_sweep_values(start, stop, step)
     if not values:
-        raise ValueError("Nenhum valor foi gerado para o sweep")
+        raise ValueError("Nenhum valor foi gerado para a execução em lote")
 
     sweep_root = Path(output_dir)
     sweep_root.mkdir(parents=True, exist_ok=True)
@@ -196,8 +196,8 @@ def run_parameter_sweep(
             event_callback,
             type="sweep_mode_adjusted",
             message=(
-                "Execucao paralela desabilitada porque 'parar ao primeiro erro' "
-                "exige ordem estritamente sequencial."
+                "Execução paralela desabilitada porque 'parar ao primeiro erro' "
+                "exige uma ordem estritamente sequencial."
             ),
             run_index=0,
             total_runs=total_runs,
@@ -215,7 +215,7 @@ def run_parameter_sweep(
                 event_callback,
                 type="sweep_mode_adjusted",
                 message=(
-                    "Execucao paralela desabilitada: foram detectados $INSERTs "
+                    "Execução paralela desabilitada: foram detectados comandos $INSERT "
                     "relativos fora da pasta base do ATP."
                 ),
                 run_index=0,
@@ -231,8 +231,8 @@ def run_parameter_sweep(
         event_callback,
         type="sweep_started",
         message=(
-            f"Iniciando sweep de {parameter_ref.display_label} "
-            f"com {total_runs} execucao(oes)"
+            f"Iniciando execução em lote de {parameter_ref.display_label} "
+            f"com {total_runs} execução(ões)"
         ),
         run_index=0,
         total_runs=total_runs,
@@ -244,7 +244,7 @@ def run_parameter_sweep(
         _emit_event(
             event_callback,
             type="sweep_parallel_enabled",
-            message=f"Execucao paralela habilitada com {parallel_runs} worker(s).",
+            message=f"Execução paralela habilitada com {parallel_runs} processo(s) simultâneo(s).",
             run_index=0,
             total_runs=total_runs,
             value=None,
@@ -305,12 +305,12 @@ def run_parameter_sweep(
         for result in summary.results:
             if result.status == "pending":
                 result.status = "cancelled"
-                result.error = "cancelled before execution"
+                result.error = "cancelada antes da execução"
     elif summary.stopped_on_error:
         for result in summary.results:
             if result.status == "pending":
                 result.status = "skipped"
-                result.error = "not executed after previous failure"
+                result.error = "não executada após falha anterior"
 
     summary.finished_at = datetime.now()
     processed_progress = summary.processed_count / max(1, total_runs)
@@ -331,7 +331,7 @@ def run_parameter_sweep(
         _emit_event(
             event_callback,
             type="sweep_cancelled",
-            message="Sweep cancelado pelo usuario",
+            message="Execução em lote cancelada pelo usuário",
             run_index=summary.processed_count,
             total_runs=total_runs,
             value=None,
@@ -343,7 +343,7 @@ def run_parameter_sweep(
         event_callback,
         type="sweep_finished",
         message=(
-            f"Sweep finalizado: {summary.success_count} sucesso(s), "
+            f"Execução em lote finalizada: {summary.success_count} sucesso(s), "
             f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s), "
             f"{summary.skipped_count} ignorada(s)"
         ),
@@ -362,7 +362,7 @@ def _to_decimal(value: float | str | Decimal) -> Decimal:
     try:
         return Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"Valor numerico invalido: {value}") from exc
+        raise ValueError(f"Valor numérico inválido: {value}") from exc
 
 
 def _normalize_parameter_ref(
@@ -374,12 +374,12 @@ def _normalize_parameter_ref(
     if isinstance(parameter_id, str):
         line_text, sep, parameter = parameter_id.partition(":")
         if not sep:
-            raise ValueError("parameter_id em texto deve seguir o formato 'line_index:parametro'")
+            raise ValueError("O identificador do parâmetro em texto deve seguir o formato 'line_index:parametro'")
         return SweepParameterRef(line_index=int(line_text), parameter=parameter.strip())
 
     if isinstance(parameter_id, Mapping):
         if "line_index" not in parameter_id or "parameter" not in parameter_id:
-            raise ValueError("parameter_id deve conter 'line_index' e 'parameter'")
+            raise ValueError("O identificador do parâmetro deve conter 'line_index' e 'parameter'")
         return SweepParameterRef(
             line_index=int(parameter_id["line_index"]),
             parameter=str(parameter_id["parameter"]),
@@ -387,17 +387,17 @@ def _normalize_parameter_ref(
             label=str(parameter_id.get("label", "")),
         )
 
-    raise TypeError("parameter_id invalido")
+    raise TypeError("Identificador de parâmetro inválido")
 
 
 def _resolve_parallel_runs(requested_parallel_runs: int, total_runs: int) -> int:
     try:
         requested = int(requested_parallel_runs)
     except (TypeError, ValueError) as exc:
-        raise ValueError("max_parallel_runs deve ser um inteiro >= 1") from exc
+        raise ValueError("O número máximo de execuções paralelas deve ser um inteiro maior ou igual a 1") from exc
 
     if requested < 1:
-        raise ValueError("max_parallel_runs deve ser >= 1")
+        raise ValueError("O número máximo de execuções paralelas deve ser maior ou igual a 1")
 
     return min(requested, max(1, total_runs))
 
@@ -428,7 +428,7 @@ def _prepare_sweep_parameter(
         )
 
     raise ValueError(
-        f"Parametro '{parameter_ref.parameter}' nao encontrado na linha {parameter_ref.line_index + 1}"
+        f"Parâmetro '{parameter_ref.parameter}' não encontrado na linha {parameter_ref.line_index + 1}"
     )
 
 
@@ -569,7 +569,7 @@ def _execute_sweep_run(
     _emit_event(
         event_callback,
         type="run_started",
-        message=f"Run {result.run_index}/{total_runs}: preparando valor {result.value:g}",
+        message=f"Execução {result.run_index}/{total_runs}: preparando valor {result.value:g}",
         run_index=result.run_index,
         total_runs=total_runs,
         value=result.value,
@@ -633,7 +633,7 @@ def _execute_sweep_run(
         )
 
         if cancel_event is not None and cancel_event.is_set():
-            raise RuntimeError("cancelled by user")
+            raise RuntimeError("cancelada pelo usuário")
 
         _emit_event(
             event_callback,
@@ -688,7 +688,7 @@ def _execute_sweep_run(
             event_callback,
             type="run_cancelled" if was_cancelled else "run_failed",
             message=(
-                f"Run {result.run_index}/{total_runs} "
+                f"Execução {result.run_index}/{total_runs} "
                 f"{'cancelado' if was_cancelled else 'falhou'} em "
                 f"{result.elapsed_seconds:.2f}s: {result.error}"
             ),
@@ -718,7 +718,7 @@ def _finalize_sweep_run(
         return
     if cancel_event is not None and cancel_event.is_set():
         result.status = "cancelled"
-        result.error = "cancelled before post-processing"
+        result.error = "cancelada antes do pós-processamento"
         return
 
     try:
@@ -726,7 +726,7 @@ def _finalize_sweep_run(
             _emit_event(
                 event_callback,
                 type="lis_parsing",
-                message=f"Pos-processando {result.lis_path.name}",
+                message=f"Pós-processando {result.lis_path.name}",
                 run_index=result.run_index,
                 total_runs=total_runs,
                 value=result.value,
@@ -753,7 +753,7 @@ def _finalize_sweep_run(
 
         if cancel_event is not None and cancel_event.is_set():
             result.status = "cancelled"
-            result.error = "cancelled during post-processing"
+            result.error = "cancelada durante o pós-processamento"
             return
 
         result.status = "success"
@@ -761,7 +761,7 @@ def _finalize_sweep_run(
             event_callback,
             type="run_succeeded",
             message=(
-                f"Run {result.run_index}/{total_runs} concluido em "
+                f"Execução {result.run_index}/{total_runs} concluída em "
                 f"{result.elapsed_seconds:.2f}s"
             ),
             run_index=result.run_index,
@@ -778,7 +778,7 @@ def _finalize_sweep_run(
             event_callback,
             type="run_failed",
             message=(
-                f"Run {result.run_index}/{total_runs} falhou em "
+                f"Execução {result.run_index}/{total_runs} falhou em "
                 f"{result.elapsed_seconds:.2f}s: {result.error}"
             ),
             run_index=result.run_index,

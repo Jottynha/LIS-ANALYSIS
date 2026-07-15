@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ ATP_DIRECT_SUPPORT_FILES = (
     "listsize.big",
 )
 LIS_TAIL_READ_BYTES = 64 * 1024
+ATP_RESULT_STAGING_PREFIX = "lis_analysis_atp_result_"
+ATP_WORKSPACE_PREFIX = "lis_analysis_atp_workspace_"
 
 
 class ATPExecutionCancelled(RuntimeError):
@@ -192,7 +195,7 @@ def _detect_lis_fatal_error(lis_path: Path) -> Optional[str]:
         excerpt = _extract_lis_error_excerpt(text)
         if "carriage return" in lower_text and "line feed" in lower_text:
             return (
-                "ATP abortou (KILL) por formatacao de fim de linha invalida no .atp gerado "
+                "ATP abortou (KILL) por formatação de fim de linha inválida no .atp gerado "
                 "(CR/LF inconsistente)."
                 + (f"\nTrecho do LIS:\n{excerpt}" if excerpt else "")
             )
@@ -220,6 +223,108 @@ def _lis_has_completion_marker(lis_path: Path) -> bool:
         r"^\s*totals\s*:", tail, flags=re.MULTILINE
     ) is not None
     return has_list_sizes and has_timing_end
+
+
+ATP_FLOAT_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?"
+
+
+def _extract_lis_simulation_progress(text: str) -> tuple[float, str] | None:
+    """Extrai progresso real do tempo simulado ou das rodadas estatisticas."""
+    if not text.strip():
+        return None
+
+    statistical_total_matches = list(
+        re.finditer(
+            r"\bNENERG\s*=\s*(\d+)\s+simulations?\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    planned_total_match = re.search(
+        r"^Misc\.\s+data\.\s+(?:\d+\s+){8}(\d+)",
+        text,
+        flags=re.MULTILINE,
+    )
+    total = 0
+    if statistical_total_matches:
+        total = int(statistical_total_matches[-1].group(1))
+    elif planned_total_match is not None:
+        total = int(planned_total_match.group(1))
+
+    if total > 0:
+        current_matches = list(
+            re.finditer(
+                r"simulation\s+number\s+(\d+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        current = int(current_matches[-1].group(1)) if current_matches else 0
+        progress = max(0.0, min(1.0, current / total))
+        if current == 0:
+            return progress, f"Preparando {total} casos estat\u00edsticos"
+        return progress, f"Simulando caso {current}/{total}"
+
+    misc_pattern = re.compile(
+        rf"Misc\.\s+data\.\s+({ATP_FLOAT_PATTERN})\s+({ATP_FLOAT_PATTERN})",
+        flags=re.IGNORECASE,
+    )
+    misc_match = misc_pattern.search(text)
+    if misc_match is None:
+        return None
+
+    try:
+        tmax = float(misc_match.group(2))
+    except ValueError:
+        return None
+    if tmax <= 0:
+        return None
+
+    simulated_times: list[float] = []
+    step_pattern = re.compile(
+        rf"^\s*\d+\s+({ATP_FLOAT_PATTERN})(?:\s|$)",
+        flags=re.MULTILINE,
+    )
+    for match in step_pattern.finditer(text):
+        try:
+            simulated_times.append(float(match.group(1)))
+        except ValueError:
+            continue
+
+    plot_span_pattern = re.compile(
+        rf"Plot\s+timespan.*?=\s*{ATP_FLOAT_PATTERN}\s+({ATP_FLOAT_PATTERN})",
+        flags=re.IGNORECASE,
+    )
+    for match in plot_span_pattern.finditer(text):
+        try:
+            simulated_times.append(float(match.group(1)))
+        except ValueError:
+            continue
+
+    if not simulated_times:
+        return 0.0, "Iniciando passos de tempo"
+
+    current_time = max(0.0, max(simulated_times))
+    progress = max(0.0, min(1.0, current_time / tmax))
+    return progress, f"Simulando t={current_time:g}s de {tmax:g}s"
+
+
+def _read_lis_progress_text(lis_path: Path) -> str:
+    # Le cabecalho e cauda do LIS sem reler arquivos grandes por inteiro.
+    header_bytes = 64 * 1024
+    tail_bytes = 256 * 1024
+    with lis_path.open("rb") as stream:
+        stream.seek(0, 2)
+        size = stream.tell()
+        if size <= header_bytes + tail_bytes:
+            stream.seek(0)
+            data = stream.read()
+        else:
+            stream.seek(0)
+            header = stream.read(header_bytes)
+            stream.seek(-tail_bytes, 2)
+            data = header + b"\n" + stream.read(tail_bytes)
+    return data.decode(errors="replace")
 
 
 def _stage_direct_solver_support(
@@ -404,11 +509,12 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
         pass
 
 
-def run_atp_solver(
+def _run_atp_solver_in_workspace(
     atp_file_path: str,
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Any | None = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
@@ -422,13 +528,13 @@ def run_atp_solver(
     atp_path = Path(atp_file_path)
 
     if not atp_path.exists():
-        raise FileNotFoundError(f"Arquivo .atp nao encontrado: {atp_file_path}")
+        raise FileNotFoundError(f"Arquivo .atp não encontrado: {atp_file_path}")
 
     missing_insert_dependencies = get_missing_insert_dependencies(atp_file_path)
     if missing_insert_dependencies:
         details = "\n".join([f"linha {line_no}: {target}" for line_no, target in missing_insert_dependencies])
         raise FileNotFoundError(
-            "Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s). "
+            "Arquivo(s) auxiliar(es) de $INSERT não encontrado(s). "
             "Copie os includes do ATPDraw para a mesma pasta do .atp ou ajuste os caminhos.\n"
             f"{details}"
         )
@@ -510,7 +616,7 @@ def run_atp_solver(
             except Exception:
                 pass
 
-    _notify("===== ATP SIMULATION START =====")
+    _notify("===== INÍCIO DA SIMULAÇÃO ATP =====")
     wrapper_executable, direct_executable = _discover_atp_executables()
     direct_support_files: list[Path] = []
     use_direct_solver = False
@@ -522,7 +628,7 @@ def run_atp_solver(
             )
             use_direct_solver = True
         except Exception as exc:
-            _notify(f"Direct ATP unavailable ({exc}). Falling back to runATP.exe.")
+            _notify(f"Solver ATP direto indisponível ({exc}). Usando runATP.exe.")
 
     # Mantem compatibilidade com integracoes que interceptam o processo e
     # transforma a falha real ao iniciar em uma mensagem de configuracao clara.
@@ -539,10 +645,10 @@ def run_atp_solver(
             "-R",
         ]
 
-    _notify(f"ATP mode: {'direct tpbig' if use_direct_solver else 'runATP wrapper'}")
-    _notify(f"ATP executable: {solver_command[0]}")
-    _notify(f"ATP input: {atp_path}")
-    _notify(f"Working directory: {working_directory}")
+    _notify(f"Modo ATP: {'tpbig direto' if use_direct_solver else 'intermediado por runATP'}")
+    _notify(f"Executável ATP: {solver_command[0]}")
+    _notify(f"Arquivo ATP: {atp_path}")
+    _notify(f"Diretório de trabalho: {working_directory}")
 
     # Executa o solver direto quando disponivel; mantem o wrapper como fallback.
     try:
@@ -558,13 +664,13 @@ def run_atp_solver(
     except FileNotFoundError as exc:
         _cleanup_direct_solver_support(direct_support_files)
         raise FileNotFoundError(
-            "Executavel ATP nao encontrado. Instale o ATP ou configure ATP_HOME, "
+            "Executável ATP não encontrado. Instale o ATP ou configure ATP_HOME, "
             "ATP_TPBIG ou ATP_RUNATP."
         ) from exc
     except Exception:
         _cleanup_direct_solver_support(direct_support_files)
         raise
-    _notify(f"Process started (pid={process.pid}). Waiting for completion...")
+    _notify(f"Processo iniciado (pid={process.pid}). Aguardando conclusão...")
 
     # Alguns wrappers do ATP exibem "Hit any key to close this window" no fim.
     auto_enter_thread = None
@@ -593,7 +699,7 @@ def run_atp_solver(
                         _notify(f"[runATP] {clean}")
                     if "total execution time was" in lower or "atp finished at" in lower:
                         if not completion_event.is_set():
-                            _notify("Completion marker detected in runATP output.")
+                            _notify("Marcador de conclusão detectado na saída do runATP.")
                         completion_event.set()
         except Exception:
             pass
@@ -610,6 +716,45 @@ def run_atp_solver(
     stable_window_with_completion_marker_sec = 0.75
     process_done = False
     process_done_at_monotonic = None
+    last_progress_check_monotonic = 0.0
+    last_reported_progress = -1.0
+    last_progress_detail = ""
+
+    def _report_lis_progress(*, force: bool = False) -> None:
+        nonlocal last_progress_check_monotonic, last_reported_progress, last_progress_detail
+        if progress_callback is None or lis_path is None:
+            return
+
+        now = time.monotonic()
+        if not force and (now - last_progress_check_monotonic) < 0.25:
+            return
+        last_progress_check_monotonic = now
+
+        try:
+            progress_state = _extract_lis_simulation_progress(
+                _read_lis_progress_text(lis_path)
+            )
+        except OSError:
+            return
+        if progress_state is None:
+            return
+
+        progress, detail = progress_state
+        should_report = (
+            force
+            or progress >= 1.0
+            or progress - last_reported_progress >= 0.005
+            or detail != last_progress_detail
+        )
+        if not should_report:
+            return
+
+        last_reported_progress = max(last_reported_progress, progress)
+        last_progress_detail = detail
+        try:
+            progress_callback(last_reported_progress, detail)
+        except Exception:
+            pass
 
     def _update_lis_state(required_stable_window_sec: float) -> bool:
         nonlocal lis_path, last_size, last_change_monotonic
@@ -654,15 +799,15 @@ def run_atp_solver(
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                _notify("Cancellation requested. Stopping ATP process...")
+                _notify("Cancelamento solicitado. Encerrando o processo ATP...")
                 _update_lis_state(0.0)
                 _terminate_process_tree(process)
                 removed_results = _cleanup_cancelled_results()
                 if removed_results:
                     _notify(
-                        f"Removed {len(removed_results)} incomplete ATP result file(s)."
+                        f"Removido(s) {len(removed_results)} resultado(s) ATP incompleto(s)."
                     )
-                raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
@@ -670,6 +815,7 @@ def run_atp_solver(
                 stable_window_after_process_sec if process_done else stable_window_running_sec
             )
             lis_stable = _update_lis_state(required_stable_window_sec)
+            _report_lis_progress()
             marker_check_ready = bool(
                 lis_path is not None
                 and last_change_monotonic is not None
@@ -693,8 +839,8 @@ def run_atp_solver(
                     return_code = polled
                     process_done = True
                     process_done_at_monotonic = now_monotonic
-                    _notify(f"Process finished with return code {return_code}")
-                    _notify("Waiting for LIS generation/stabilization...")
+                    _notify(f"Processo finalizado com código de retorno {return_code}")
+                    _notify("Aguardando geração e estabilização do LIS...")
 
             # Se o wrapper travar no "Hit any key", finaliza automaticamente
             # quando houver marcador de conclusao e LIS estavel.
@@ -704,7 +850,7 @@ def run_atp_solver(
                 and completion_event.is_set()
                 and lis_stable
             ):
-                _notify("Stable LIS + completion marker detected. Closing interactive runATP wrapper...")
+                _notify("LIS estável e marcador de conclusão detectados. Encerrando a janela interativa do runATP...")
                 try:
                     process.terminate()
                     return_code = process.wait(timeout=5)
@@ -714,8 +860,8 @@ def run_atp_solver(
 
                 process_done = True
                 process_done_at_monotonic = now_monotonic
-                _notify(f"Process finished with return code {return_code}")
-                _notify("Waiting for LIS generation/stabilization...")
+                _notify(f"Processo finalizado com código de retorno {return_code}")
+                _notify("Aguardando geração e estabilização do LIS...")
 
             # O bloco final do LIS e o tamanho estavel confirmam a conclusao
             # sem depender dos 8 segundos de ociosidade do wrapper interativo.
@@ -725,7 +871,7 @@ def run_atp_solver(
                 and lis_completion_marker
                 and lis_stable
             ):
-                _notify("Complete and stable LIS detected. Closing interactive runATP wrapper...")
+                _notify("LIS completo e estável detectado. Encerrando a janela interativa do runATP...")
                 try:
                     process.terminate()
                     return_code = process.wait(timeout=5)
@@ -735,8 +881,8 @@ def run_atp_solver(
 
                 process_done = True
                 process_done_at_monotonic = now_monotonic
-                _notify(f"Process finished with return code {return_code}")
-                _notify("Waiting for LIS generation/stabilization...")
+                _notify(f"Processo finalizado com código de retorno {return_code}")
+                _notify("Aguardando geração e estabilização do LIS...")
 
             # Fallback: alguns wrappers não emitem marcador de conclusão em execução parametrizada.
             # Se já existe LIS estável e sem output novo por alguns segundos, fecha o wrapper ocioso.
@@ -747,7 +893,7 @@ def run_atp_solver(
                 and (now_monotonic - last_output_monotonic) > 8.0
                 and elapsed_total > 12.0
             ):
-                _notify("Stable LIS detected with idle wrapper output. Forcing wrapper shutdown...")
+                _notify("LIS estável detectado sem nova saída do runATP. Encerrando o intermediador...")
                 try:
                     process.terminate()
                     return_code = process.wait(timeout=5)
@@ -757,8 +903,8 @@ def run_atp_solver(
 
                 process_done = True
                 process_done_at_monotonic = now_monotonic
-                _notify(f"Process finished with return code {return_code}")
-                _notify("Waiting for LIS generation/stabilization...")
+                _notify(f"Processo finalizado com código de retorno {return_code}")
+                _notify("Aguardando geração e estabilização do LIS...")
 
             if process_done and lis_stable:
                 break
@@ -767,7 +913,7 @@ def run_atp_solver(
             if elapsed_total > timeout:
                 process.kill()
                 process.wait()
-                raise TimeoutError(f"Timeout aguardando termino do processo ATP ({timeout}s)")
+                raise TimeoutError(f"Tempo limite excedido ao aguardar o término do processo ATP ({timeout}s)")
 
             # Tolerancia curta para flush apos processo terminar.
             if (
@@ -808,23 +954,23 @@ def run_atp_solver(
             _is_atp_temporary_file,
         )
         if removed_temporary:
-            _notify(f"Removed {len(removed_temporary)} ATP temporary file(s).")
+            _notify(f"Removido(s) {len(removed_temporary)} arquivo(s) temporário(s) do ATP.")
 
     if cancel_event is not None and cancel_event.is_set():
         removed_results = _cleanup_cancelled_results()
         if removed_results:
-            _notify(f"Removed {len(removed_results)} incomplete ATP result file(s).")
-        raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+            _notify(f"Removido(s) {len(removed_results)} resultado(s) ATP incompleto(s).")
+        raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
     elapsed = time.monotonic() - start_monotonic
 
-    _notify("Simulacao concluida")
+    _notify("Simulação concluída")
     _notify(f"Tempo total: {elapsed:.2f} s")
-    _notify("===== ATP SIMULATION END =====")
+    _notify("===== FIM DA SIMULAÇÃO ATP =====")
 
     if lis_path is None:
         raise RuntimeError(
-            f"ATP process finished with code {return_code}, but .lis/.LIS was not generated"
+            f"O processo ATP terminou com o código {return_code}, mas não gerou um arquivo .lis/.LIS"
         )
 
     lis_fatal_error = _detect_lis_fatal_error(lis_path)
@@ -832,8 +978,167 @@ def run_atp_solver(
         raise RuntimeError(lis_fatal_error)
 
     if return_code != 0:
-        _notify(f"Aviso: ATP finalizou com codigo {return_code}, mas gerou LIS valido.")
+        _notify(f"Aviso: ATP finalizou com código {return_code}, mas gerou LIS válido.")
 
-    _notify(f"LIS ready: {lis_path}")
+    _report_lis_progress(force=True)
+    if progress_callback is not None:
+        try:
+            progress_callback(1.0, "Simula\u00e7\u00e3o ATP conclu\u00edda")
+        except Exception:
+            pass
+    _notify(f"LIS pronto: {lis_path}")
 
     return str(lis_path)
+
+
+def _isolated_workspace_destination(workspace_root: Path, source: Path) -> Path:
+    """Mapeia um caminho absoluto sem alterar a estrutura usada por includes relativos."""
+    resolved = source.resolve()
+    anchor_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.anchor).strip("_")
+    if not anchor_label:
+        anchor_label = "root"
+
+    relative_parts = resolved.parts[1:] if resolved.anchor else resolved.parts
+    return workspace_root / "files" / anchor_label / Path(*relative_parts)
+
+
+def _prepare_isolated_workspace(atp_path: Path) -> tuple[Path, Path]:
+    """Copia o ATP e todos os $INSERT relativos para um workspace exclusivo."""
+    source_atp = atp_path.resolve()
+    workspace_root = Path(tempfile.mkdtemp(prefix=ATP_WORKSPACE_PREFIX))
+    pending = [source_atp]
+    copied: dict[Path, Path] = {}
+
+    try:
+        while pending:
+            source = pending.pop()
+            source = source.resolve()
+            if source in copied:
+                continue
+            if not source.is_file():
+                raise FileNotFoundError(f"Dependência ATP não encontrada: {source}")
+
+            destination = _isolated_workspace_destination(workspace_root, source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            copied[source] = destination
+
+            for line_no, target in _parse_insert_targets(source):
+                normalized = target.replace("\\", "/")
+                is_windows_absolute = re.match(r"^[A-Za-z]:[\\/]", target) is not None
+                target_path = Path(normalized)
+
+                # Includes absolutos permanecem apontando para a instalacao/projeto
+                # original. Eles sao somente leitura para o ATP.
+                if is_windows_absolute or target_path.is_absolute():
+                    resolved = _resolve_insert_target_path(source.parent, target)
+                    if resolved is None:
+                        raise FileNotFoundError(
+                            f"$INSERT não encontrado em {source.name}, linha {line_no}: {target}"
+                        )
+                    continue
+
+                dependency = (source.parent / target_path).resolve()
+                if not dependency.is_file():
+                    raise FileNotFoundError(
+                        f"$INSERT não encontrado em {source.name}, linha {line_no}: {target}"
+                    )
+                pending.append(dependency)
+
+        return workspace_root, copied[source_atp]
+    except Exception:
+        shutil.rmtree(workspace_root, ignore_errors=True)
+        raise
+
+
+def _stage_atp_results(executed_atp: Path, generated_lis: Path) -> Path:
+    """Preserva resultados validos fora do workspace antes de remove-lo."""
+    staging_dir = Path(tempfile.mkdtemp(prefix=ATP_RESULT_STAGING_PREFIX))
+    try:
+        staged_lis = staging_dir / generated_lis.name
+        shutil.copy2(generated_lis, staged_lis)
+
+        stems = {executed_atp.stem.lower(), generated_lis.stem.lower()}
+        for candidate in executed_atp.parent.iterdir():
+            if (
+                candidate.is_file()
+                and candidate.stem.lower() in stems
+                and candidate.suffix.lower() in {".pl4", ".dbg"}
+            ):
+                shutil.copy2(candidate, staging_dir / candidate.name)
+        return staged_lis
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+
+def is_staged_atp_result(path: Path | str) -> bool:
+    candidate = Path(path)
+    staging_parent = candidate.parent
+    try:
+        system_temp = Path(tempfile.gettempdir()).resolve()
+        return (
+            staging_parent.name.startswith(ATP_RESULT_STAGING_PREFIX)
+            and staging_parent.resolve().parent == system_temp
+        )
+    except OSError:
+        return False
+
+
+def iter_staged_atp_artifacts(lis_path: Path | str) -> tuple[Path, ...]:
+    """Lista LIS e sidecars pertencentes ao mesmo resultado temporariamente preservado."""
+    candidate = Path(lis_path)
+    if not is_staged_atp_result(candidate) or not candidate.parent.is_dir():
+        return (candidate,) if candidate.exists() else ()
+    return tuple(path for path in candidate.parent.iterdir() if path.is_file())
+
+
+def cleanup_staged_atp_result(path: Path | str | None) -> None:
+    """Remove com seguranca apenas o diretorio de staging criado por este modulo."""
+    if path is None:
+        return
+    candidate = Path(path)
+    if is_staged_atp_result(candidate):
+        shutil.rmtree(candidate.parent, ignore_errors=True)
+
+
+def run_atp_solver(
+    atp_file_path: str,
+    timeout: int = 600,
+    status_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Any | None = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> str:
+    """Executa o ATP em workspace temporario e devolve apenas resultados validos."""
+    source_atp = Path(atp_file_path)
+    if not source_atp.is_file():
+        raise FileNotFoundError(f"Arquivo .atp não encontrado: {atp_file_path}")
+
+    def notify(message: str) -> None:
+        if status_callback is not None:
+            try:
+                status_callback(message)
+            except Exception:
+                pass
+
+    workspace_root: Path | None = None
+    try:
+        notify("Preparando workspace isolado da simulacao ATP...")
+        workspace_root, isolated_atp = _prepare_isolated_workspace(source_atp)
+        notify(f"Workspace isolado pronto: {workspace_root}")
+
+        generated_lis = Path(
+            _run_atp_solver_in_workspace(
+                str(isolated_atp),
+                timeout=timeout,
+                status_callback=status_callback,
+                cancel_event=cancel_event,
+                progress_callback=progress_callback,
+            )
+        )
+        staged_lis = _stage_atp_results(isolated_atp, generated_lis)
+        notify("Resultados validos preservados; limpando workspace isolado...")
+        return str(staged_lis)
+    finally:
+        if workspace_root is not None:
+            shutil.rmtree(workspace_root, ignore_errors=True)

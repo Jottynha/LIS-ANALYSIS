@@ -4,13 +4,53 @@ from lis_analysis.solver.atp_runner import (
     ATP_DIRECT_SUPPORT_FILES,
     _cleanup_direct_solver_support,
     _discover_atp_executables,
+    _extract_lis_simulation_progress,
     _is_atp_temporary_file,
     _is_cancelled_atp_result,
     _lis_has_completion_marker,
+    _prepare_isolated_workspace,
     _remove_files_changed_since_snapshot,
     _snapshot_matching_files,
     _stage_direct_solver_support,
+    cleanup_staged_atp_result,
+    iter_staged_atp_artifacts,
+    run_atp_solver,
 )
+
+
+def test_extracts_real_progress_from_statistical_simulation():
+    lis_text = """
+Misc. data.  500  1  0  0  1  0  0  1  300  0
+The data case involves NENERG = 300 simulations.
+Random switching times for simulation number  126  :
+"""
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.42
+    assert detail == "Simulando caso 126/300"
+
+
+def test_statistical_progress_starts_at_zero_before_first_case():
+    lis_text = "Misc. data.  500  1  0  0  1  0  0  1  300  0\n"
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.0
+    assert "300" in detail
+
+
+def test_extracts_real_progress_from_non_statistical_time_steps():
+    lis_text = """
+Misc. data.     1.000E-06   1.000E+00   0.000E+00
+   Step      Time      NODE
+ 420000       .42     12.0
+"""
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.42
+    assert "t=0.42s" in detail
 
 
 def test_lis_completion_marker_requires_final_timing_block(tmp_path: Path):
@@ -156,3 +196,66 @@ def test_cancelled_result_cleanup_preserves_unchanged_previous_results(tmp_path:
     assert set(removed) == {changed, partial}
     assert unchanged.exists()
     assert debug.exists()
+
+
+def test_isolated_workspace_copies_nested_relative_inserts(tmp_path: Path):
+    project = tmp_path / "project"
+    includes = tmp_path / "includes"
+    nested = includes / "nested"
+    project.mkdir()
+    nested.mkdir(parents=True)
+
+    atp_path = project / "caso.atp"
+    first_include = includes / "first.inc"
+    second_include = nested / "second.lib"
+    atp_path.write_text("$INSERT, ../includes/first.inc\n", encoding="utf-8")
+    first_include.write_text("$INSERT, nested/second.lib\n", encoding="utf-8")
+    second_include.write_text("dados auxiliares\n", encoding="utf-8")
+
+    workspace, isolated_atp = _prepare_isolated_workspace(atp_path)
+    try:
+        isolated_first = (isolated_atp.parent / "../includes/first.inc").resolve()
+        isolated_second = (isolated_first.parent / "nested/second.lib").resolve()
+
+        assert isolated_atp.is_file()
+        assert isolated_first.read_text(encoding="utf-8").startswith("$INSERT")
+        assert isolated_second.read_text(encoding="utf-8") == "dados auxiliares\n"
+        assert isolated_atp.parent != atp_path.parent
+    finally:
+        import shutil
+
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def test_runner_removes_workspace_and_stages_only_valid_results(tmp_path: Path, monkeypatch):
+    atp_path = tmp_path / "caso.atp"
+    atp_path.write_text("BEGIN NEW DATA CASE\n", encoding="utf-8")
+    observed_workspace = None
+
+    def fake_workspace_runner(isolated_atp_path: str, **_kwargs) -> str:
+        nonlocal observed_workspace
+        isolated_atp = Path(isolated_atp_path)
+        observed_workspace = isolated_atp.parents[3]
+        lis_path = isolated_atp.with_suffix(".lis")
+        lis_path.write_text("LIS valido\n", encoding="utf-8")
+        isolated_atp.with_suffix(".pl4").write_bytes(b"plot")
+        (isolated_atp.parent / "123.tmp").write_text("temporario", encoding="utf-8")
+        return str(lis_path)
+
+    monkeypatch.setattr(
+        "lis_analysis.solver.atp_runner._run_atp_solver_in_workspace",
+        fake_workspace_runner,
+    )
+
+    staged_lis = Path(run_atp_solver(str(atp_path)))
+    try:
+        artifacts = {path.suffix.lower() for path in iter_staged_atp_artifacts(staged_lis)}
+        assert staged_lis.read_text(encoding="utf-8") == "LIS valido\n"
+        assert artifacts == {".lis", ".pl4"}
+        assert observed_workspace is not None
+        assert not observed_workspace.exists()
+        assert not (tmp_path / "caso.lis").exists()
+        assert not (tmp_path / "caso.pl4").exists()
+        assert not (tmp_path / "123.tmp").exists()
+    finally:
+        cleanup_staged_atp_result(staged_lis)

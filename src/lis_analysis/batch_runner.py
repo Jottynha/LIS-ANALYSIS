@@ -268,6 +268,7 @@ def run_parameter_sweep(
             lis_parser=lis_parser,
             event_callback=event_callback,
             lis_parser_lock=lis_parser_lock,
+            cancel_event=cancel_event,
         )
 
     # O solver pode rodar em paralelo, mas o pos-processamento da GUI usa
@@ -311,6 +312,18 @@ def run_parameter_sweep(
     processed_progress = summary.processed_count / max(1, total_runs)
 
     if summary.cancelled:
+        for cancelled_result in summary.results:
+            if cancelled_result.status != "cancelled":
+                continue
+            shutil.rmtree(cancelled_result.run_dir, ignore_errors=True)
+            cancelled_result.atp_path = None
+            cancelled_result.lis_path = None
+
+        try:
+            sweep_dir.rmdir()
+        except OSError:
+            pass
+
         _emit_event(
             event_callback,
             type="sweep_cancelled",
@@ -596,8 +609,12 @@ def _execute_sweep_run(
                 str(execution_atp_path),
                 timeout=solver_timeout,
                 status_callback=_solver_status_callback,
+                cancel_event=cancel_event,
             )
         )
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("cancelled by user")
 
         _emit_event(
             event_callback,
@@ -647,11 +664,13 @@ def _execute_sweep_run(
         result.atp_path = relocated.get("atp_path")
         result.lis_path = relocated.get("lis_path")
 
+        was_cancelled = cancel_event is not None and cancel_event.is_set()
         _emit_event(
             event_callback,
-            type="run_failed",
+            type="run_cancelled" if was_cancelled else "run_failed",
             message=(
-                f"Run {result.run_index}/{total_runs} falhou em "
+                f"Run {result.run_index}/{total_runs} "
+                f"{'cancelado' if was_cancelled else 'falhou'} em "
                 f"{result.elapsed_seconds:.2f}s: {result.error}"
             ),
             run_index=result.run_index,
@@ -673,8 +692,13 @@ def _finalize_sweep_run(
     lis_parser: SweepLisParser | None,
     event_callback: SweepEventCallback | None,
     lis_parser_lock: threading.Lock | None,
+    cancel_event: Any | None,
 ) -> None:
     if result.status != "solver_completed":
+        return
+    if cancel_event is not None and cancel_event.is_set():
+        result.status = "cancelled"
+        result.error = "cancelled before post-processing"
         return
 
     try:
@@ -706,6 +730,11 @@ def _finalize_sweep_run(
                 with lis_parser_lock:
                     result.analysis = _parse_lis()
             result.elapsed_seconds += time.monotonic() - parse_started
+
+        if cancel_event is not None and cancel_event.is_set():
+            result.status = "cancelled"
+            result.error = "cancelled during post-processing"
+            return
 
         result.status = "success"
         _emit_event(

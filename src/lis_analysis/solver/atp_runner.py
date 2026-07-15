@@ -1,14 +1,133 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
-ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
+DEFAULT_ATP_ROOT = Path(r"C:\ATP")
+ATP_EXECUTABLE = str(DEFAULT_ATP_ROOT / "tools" / "runATP.exe")
+ATP_DIRECT_EXECUTABLE = DEFAULT_ATP_ROOT / "atpmingw" / "tpbig.exe"
+ATP_DIRECT_SUPPORT_FILES = (
+    "startup",
+    "graphics",
+    "graphics.aux",
+    "graphics.std",
+    "listsize.big",
+)
+LIS_TAIL_READ_BYTES = 64 * 1024
 
+
+class ATPExecutionCancelled(RuntimeError):
+    """Indica que a execucao ATP foi interrompida por solicitacao do usuario."""
+
+    def __init__(self, message: str, lis_path: Path | None = None):
+        super().__init__(message)
+        self.lis_path = lis_path
+
+
+def _windows_registry_atp_roots() -> list[Path]:
+    if os.name != "nt":
+        return []
+
+    try:
+        import winreg
+    except ImportError:
+        return []
+
+    roots: list[Path] = []
+    views = [
+        getattr(winreg, "KEY_WOW64_32KEY", 0),
+        getattr(winreg, "KEY_WOW64_64KEY", 0),
+    ]
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in views:
+            try:
+                with winreg.OpenKey(
+                    hive,
+                    r"SOFTWARE\ATPINST",
+                    0,
+                    winreg.KEY_READ | view,
+                ) as key:
+                    value, _kind = winreg.QueryValueEx(key, "")
+                if value:
+                    roots.append(Path(str(value)))
+            except OSError:
+                continue
+    return roots
+
+
+def _normalize_atp_root(path: Path) -> Path:
+    if path.name.lower() in {"atpmingw", "tools"}:
+        return path.parent
+    return path
+
+
+def _candidate_atp_roots() -> list[Path]:
+    candidates: list[Path] = []
+    for variable in ("ATP_HOME", "ATPINST", "ATPDIR"):
+        value = os.environ.get(variable)
+        if value:
+            candidates.append(Path(value))
+
+    candidates.extend(_windows_registry_atp_roots())
+    candidates.append(Path(ATP_EXECUTABLE).parent.parent)
+    candidates.append(DEFAULT_ATP_ROOT)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_atp_root(candidate)
+        key = str(normalized).rstrip("\\/").lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(normalized)
+    return unique
+
+
+def _discover_atp_executables(
+    candidate_roots: Optional[list[Path]] = None,
+) -> tuple[Optional[Path], Optional[Path]]:
+    wrapper = None
+    direct = None
+
+    if candidate_roots is None:
+        explicit_wrapper = os.environ.get("ATP_RUNATP")
+        explicit_direct = os.environ.get("ATP_TPBIG")
+        if explicit_wrapper and Path(explicit_wrapper).is_file():
+            wrapper = Path(explicit_wrapper)
+        if explicit_direct and Path(explicit_direct).is_file():
+            direct = Path(explicit_direct)
+        roots = _candidate_atp_roots()
+    else:
+        roots = [_normalize_atp_root(Path(root)) for root in candidate_roots]
+
+    for root in roots:
+        if wrapper is None:
+            candidate = root / "tools" / "runATP.exe"
+            if candidate.is_file():
+                wrapper = candidate
+        if direct is None:
+            candidate = root / "atpmingw" / "tpbig.exe"
+            if candidate.is_file():
+                direct = candidate
+        if wrapper is not None and direct is not None:
+            break
+
+    if wrapper is None:
+        located = shutil.which("runATP.exe")
+        if located:
+            wrapper = Path(located)
+    if direct is None:
+        located = shutil.which("tpbig.exe")
+        if located:
+            direct = Path(located)
+
+    return wrapper, direct
 
 def _adaptive_poll_interval(idle_seconds: float) -> float:
     """Define o intervalo de polling com backoff progressivo em periodos ociosos."""
@@ -85,6 +204,109 @@ def _detect_lis_fatal_error(lis_path: Path) -> Optional[str]:
     return None
 
 
+def _lis_has_completion_marker(lis_path: Path) -> bool:
+    """Confirma que o ATP escreveu o bloco final de temporizacao do LIS."""
+    try:
+        with lis_path.open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(max(0, size - LIS_TAIL_READ_BYTES))
+            tail = stream.read().decode(errors="replace").lower()
+    except Exception:
+        return False
+
+    has_list_sizes = "actual list sizes for the preceding solution follow" in tail
+    has_timing_end = "seconds after deltat-loop" in tail and re.search(
+        r"^\s*totals\s*:", tail, flags=re.MULTILINE
+    ) is not None
+    return has_list_sizes and has_timing_end
+
+
+def _stage_direct_solver_support(
+    working_directory: Path,
+    support_directory: Path,
+) -> list[Path]:
+    """Copia apenas suportes ausentes e retorna os arquivos que devem ser removidos."""
+    copied: list[Path] = []
+    try:
+        for filename in ATP_DIRECT_SUPPORT_FILES:
+            source = support_directory / filename
+            if not source.is_file():
+                raise FileNotFoundError(f"Suporte ATP ausente: {source}")
+
+            destination = working_directory / filename
+            if destination.exists():
+                continue
+
+            shutil.copy2(source, destination)
+            copied.append(destination)
+    except Exception:
+        _cleanup_direct_solver_support(copied)
+        raise
+    return copied
+
+
+def _cleanup_direct_solver_support(copied_files: list[Path]) -> None:
+    for path in reversed(copied_files):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _snapshot_matching_files(
+    directory: Path,
+    predicate: Callable[[Path], bool],
+) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for candidate in directory.iterdir():
+        if not candidate.is_file() or not predicate(candidate):
+            continue
+        try:
+            stat = candidate.stat()
+            snapshot[str(candidate.resolve()).lower()] = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+            )
+        except OSError:
+            continue
+    return snapshot
+
+
+def _is_atp_temporary_file(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        (name.startswith("dum") and name.endswith(".bin"))
+        or path.suffix.lower() in {".tmp", ".temp"}
+    )
+
+
+def _is_cancelled_atp_result(path: Path) -> bool:
+    return path.suffix.lower() in {".lis", ".pl4", ".dbg"}
+
+
+def _remove_files_changed_since_snapshot(
+    directory: Path,
+    snapshot: dict[str, tuple[int, int]],
+    predicate: Callable[[Path], bool],
+) -> list[Path]:
+    removed: list[Path] = []
+    for candidate in directory.iterdir():
+        if not candidate.is_file() or not predicate(candidate):
+            continue
+        try:
+            stat = candidate.stat()
+            current = (int(stat.st_mtime_ns), int(stat.st_size))
+            previous = snapshot.get(str(candidate.resolve()).lower())
+            if previous == current:
+                continue
+            candidate.unlink()
+            removed.append(candidate)
+        except OSError:
+            continue
+    return removed
+
+
 def _parse_insert_targets(atp_path: Path) -> list[tuple[int, str]]:
     """Extrai alvos de diretivas $INSERT no formato (linha, caminho)."""
     targets: list[tuple[int, str]] = []
@@ -145,10 +367,48 @@ def _auto_press_enter(process: subprocess.Popen, status_callback: Optional[Calla
         time.sleep(1.0)
 
 
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """Encerra o solver e, no Windows, eventuais processos filhos do wrapper."""
+    if process.poll() is not None:
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    if process.poll() is not None:
+        return
+
+    try:
+        process.terminate()
+    except Exception:
+        pass
+
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=3)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def run_atp_solver(
     atp_file_path: str,
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Any | None = None,
 ) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
@@ -178,6 +438,20 @@ def run_atp_solver(
     base_name = atp_path.stem
     start_wall_time = time.time()
     start_monotonic = time.monotonic()
+    temporary_snapshot = _snapshot_matching_files(
+        working_directory,
+        _is_atp_temporary_file,
+    )
+    def _is_current_atp_result(path: Path) -> bool:
+        return (
+            _is_cancelled_atp_result(path)
+            and path.stem.lower() == base_name.lower()
+        )
+
+    result_snapshot = _snapshot_matching_files(
+        working_directory,
+        _is_current_atp_result,
+    )
 
     lis_snapshot: dict[str, tuple[int, int]] = {}
     for existing in list(working_directory.glob("*.lis")) + list(working_directory.glob("*.LIS")):
@@ -237,26 +511,70 @@ def run_atp_solver(
                 pass
 
     _notify("===== ATP SIMULATION START =====")
-    _notify(f"ATP executable: {ATP_EXECUTABLE}")
+    wrapper_executable, direct_executable = _discover_atp_executables()
+    direct_support_files: list[Path] = []
+    use_direct_solver = False
+    if direct_executable is not None:
+        try:
+            direct_support_files = _stage_direct_solver_support(
+                working_directory,
+                direct_executable.parent,
+            )
+            use_direct_solver = True
+        except Exception as exc:
+            _notify(f"Direct ATP unavailable ({exc}). Falling back to runATP.exe.")
+
+    # Mantem compatibilidade com integracoes que interceptam o processo e
+    # transforma a falha real ao iniciar em uma mensagem de configuracao clara.
+    if wrapper_executable is None:
+        wrapper_executable = Path(ATP_EXECUTABLE)
+
+    solver_command = [str(wrapper_executable), atp_name]
+    if use_direct_solver:
+        solver_command = [
+            str(direct_executable),
+            "DISK",
+            atp_name,
+            "s",
+            "-R",
+        ]
+
+    _notify(f"ATP mode: {'direct tpbig' if use_direct_solver else 'runATP wrapper'}")
+    _notify(f"ATP executable: {solver_command[0]}")
     _notify(f"ATP input: {atp_path}")
     _notify(f"Working directory: {working_directory}")
 
-    # Executa runATP e aguarda o término real do processo.
-    process = subprocess.Popen(
-        [ATP_EXECUTABLE, atp_name],
-        cwd=working_directory,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    # Executa o solver direto quando disponivel; mantem o wrapper como fallback.
+    try:
+        process = subprocess.Popen(
+            solver_command,
+            cwd=working_directory,
+            stdin=subprocess.DEVNULL if use_direct_solver else subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError as exc:
+        _cleanup_direct_solver_support(direct_support_files)
+        raise FileNotFoundError(
+            "Executavel ATP nao encontrado. Instale o ATP ou configure ATP_HOME, "
+            "ATP_TPBIG ou ATP_RUNATP."
+        ) from exc
+    except Exception:
+        _cleanup_direct_solver_support(direct_support_files)
+        raise
     _notify(f"Process started (pid={process.pid}). Waiting for completion...")
 
     # Alguns wrappers do ATP exibem "Hit any key to close this window" no fim.
-    # Este thread garante fechamento automático sem depender de interação manual.
-    auto_enter_thread = threading.Thread(target=_auto_press_enter, args=(process, status_callback), daemon=True)
-    auto_enter_thread.start()
+    auto_enter_thread = None
+    if not use_direct_solver:
+        auto_enter_thread = threading.Thread(
+            target=_auto_press_enter,
+            args=(process, status_callback),
+            daemon=True,
+        )
+        auto_enter_thread.start()
 
     completion_event = threading.Event()
     last_output_monotonic = time.monotonic()
@@ -270,8 +588,9 @@ def run_atp_solver(
                 clean = line.strip()
                 if clean:
                     last_output_monotonic = time.monotonic()
-                    _notify(f"[runATP] {clean}")
                     lower = clean.lower()
+                    if not use_direct_solver:
+                        _notify(f"[runATP] {clean}")
                     if "total execution time was" in lower or "atp finished at" in lower:
                         if not completion_event.is_set():
                             _notify("Completion marker detected in runATP output.")
@@ -288,6 +607,7 @@ def run_atp_solver(
     last_change_monotonic = None
     stable_window_running_sec = 3.0
     stable_window_after_process_sec = 1.0
+    stable_window_with_completion_marker_sec = 0.75
     process_done = False
     process_done_at_monotonic = None
 
@@ -324,14 +644,48 @@ def run_atp_solver(
             and (time.monotonic() - last_change_monotonic) >= required_stable_window_sec
         )
 
+    def _cleanup_cancelled_results() -> list[Path]:
+        return _remove_files_changed_since_snapshot(
+            working_directory,
+            result_snapshot,
+            _is_current_atp_result,
+        )
+
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _notify("Cancellation requested. Stopping ATP process...")
+                _update_lis_state(0.0)
+                _terminate_process_tree(process)
+                removed_results = _cleanup_cancelled_results()
+                if removed_results:
+                    _notify(
+                        f"Removed {len(removed_results)} incomplete ATP result file(s)."
+                    )
+                raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
             required_stable_window_sec = (
                 stable_window_after_process_sec if process_done else stable_window_running_sec
             )
             lis_stable = _update_lis_state(required_stable_window_sec)
+            marker_check_ready = bool(
+                lis_path is not None
+                and last_change_monotonic is not None
+                and (now_monotonic - last_change_monotonic) >= 0.25
+            )
+            lis_completion_marker = bool(
+                marker_check_ready and _lis_has_completion_marker(lis_path)
+            )
+            if (
+                not lis_stable
+                and lis_completion_marker
+                and last_change_monotonic is not None
+                and (now_monotonic - last_change_monotonic)
+                >= stable_window_with_completion_marker_sec
+            ):
+                lis_stable = True
 
             if not process_done:
                 polled = process.poll()
@@ -344,8 +698,34 @@ def run_atp_solver(
 
             # Se o wrapper travar no "Hit any key", finaliza automaticamente
             # quando houver marcador de conclusao e LIS estavel.
-            if not process_done and completion_event.is_set() and lis_stable:
+            if (
+                not use_direct_solver
+                and not process_done
+                and completion_event.is_set()
+                and lis_stable
+            ):
                 _notify("Stable LIS + completion marker detected. Closing interactive runATP wrapper...")
+                try:
+                    process.terminate()
+                    return_code = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return_code = process.wait()
+
+                process_done = True
+                process_done_at_monotonic = now_monotonic
+                _notify(f"Process finished with return code {return_code}")
+                _notify("Waiting for LIS generation/stabilization...")
+
+            # O bloco final do LIS e o tamanho estavel confirmam a conclusao
+            # sem depender dos 8 segundos de ociosidade do wrapper interativo.
+            if (
+                not use_direct_solver
+                and not process_done
+                and lis_completion_marker
+                and lis_stable
+            ):
+                _notify("Complete and stable LIS detected. Closing interactive runATP wrapper...")
                 try:
                     process.terminate()
                     return_code = process.wait(timeout=5)
@@ -361,7 +741,8 @@ def run_atp_solver(
             # Fallback: alguns wrappers não emitem marcador de conclusão em execução parametrizada.
             # Se já existe LIS estável e sem output novo por alguns segundos, fecha o wrapper ocioso.
             if (
-                not process_done
+                not use_direct_solver
+                and not process_done
                 and lis_stable
                 and (now_monotonic - last_output_monotonic) > 8.0
                 and elapsed_total > 12.0
@@ -417,8 +798,23 @@ def run_atp_solver(
         except Exception:
             pass
 
-        auto_enter_thread.join(timeout=1.0)
+        if auto_enter_thread is not None:
+            auto_enter_thread.join(timeout=1.0)
         output_thread.join(timeout=1.0)
+        _cleanup_direct_solver_support(direct_support_files)
+        removed_temporary = _remove_files_changed_since_snapshot(
+            working_directory,
+            temporary_snapshot,
+            _is_atp_temporary_file,
+        )
+        if removed_temporary:
+            _notify(f"Removed {len(removed_temporary)} ATP temporary file(s).")
+
+    if cancel_event is not None and cancel_event.is_set():
+        removed_results = _cleanup_cancelled_results()
+        if removed_results:
+            _notify(f"Removed {len(removed_results)} incomplete ATP result file(s).")
+        raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
 
     elapsed = time.monotonic() - start_monotonic
 

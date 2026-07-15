@@ -153,6 +153,7 @@ def run_parameter_sweep(
     cancel_event: Any | None = None,
     event_callback: SweepEventCallback | None = None,
     max_parallel_runs: int = 1,
+    atp_executable_path: str | Path | None = None,
 ) -> SweepExecutionSummary:
     """Executa sweep parametrico com opcao de isolamento/paralelismo por run."""
     base_path = Path(base_atp_path)
@@ -261,6 +262,7 @@ def run_parameter_sweep(
             total_runs=total_runs,
             solver_runner=solver_runner,
             solver_timeout=solver_timeout,
+            atp_executable_path=atp_executable_path,
             event_callback=event_callback,
             cancel_event=cancel_event,
             isolate_workspace=isolate_workspace,
@@ -546,6 +548,7 @@ def _execute_sweep_run(
     total_runs: int,
     solver_runner: Callable[..., str],
     solver_timeout: int,
+    atp_executable_path: str | Path | None,
     event_callback: SweepEventCallback | None,
     cancel_event: Any | None,
     isolate_workspace: bool,
@@ -629,6 +632,7 @@ def _execute_sweep_run(
                 status_callback=_solver_status_callback,
                 cancel_event=cancel_event,
                 progress_callback=_solver_progress_callback,
+                atp_executable_path=atp_executable_path,
             )
         )
 

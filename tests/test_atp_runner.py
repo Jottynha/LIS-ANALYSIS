@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from lis_analysis.solver.atp_runner import (
     ATP_DIRECT_SUPPORT_FILES,
     _cleanup_direct_solver_support,
@@ -15,7 +17,24 @@ from lis_analysis.solver.atp_runner import (
     cleanup_staged_atp_result,
     iter_staged_atp_artifacts,
     run_atp_solver,
+    validate_atp_executable_path,
 )
+
+
+
+def test_validates_manually_selected_atp_executable(tmp_path: Path):
+    executable = tmp_path / "tpbig.exe"
+    executable.write_bytes(b"solver")
+
+    assert validate_atp_executable_path(executable) == executable.resolve()
+
+
+def test_rejects_unrelated_manually_selected_executable(tmp_path: Path):
+    executable = tmp_path / "ATPDraw.exe"
+    executable.write_bytes(b"gui")
+
+    with pytest.raises(ValueError, match="tpbig.exe ou runATP.exe"):
+        validate_atp_executable_path(executable)
 
 
 def test_extracts_real_progress_from_statistical_simulation():

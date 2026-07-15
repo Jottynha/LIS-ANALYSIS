@@ -17,9 +17,11 @@ from .batch_runner import SweepParameterRef, generate_sweep_values, run_paramete
 from .solver.atp_runner import (
     ATPExecutionCancelled,
     cleanup_staged_atp_result,
+    find_available_atp_executable,
     get_missing_insert_dependencies,
     iter_staged_atp_artifacts,
     run_atp_solver,
+    validate_atp_executable_path,
 )
 from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from .atp_writer import write_atp_file
@@ -234,6 +236,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
+        self.atp_executable_var = tk.StringVar(value='')
         self.atp_param_status_var = tk.StringVar(value="Nenhum parâmetro carregado")
         self.atp_sweep_parameter_var = tk.StringVar(value="")
         self.atp_sweep_start_var = tk.StringVar(value="")
@@ -307,6 +310,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
                 self.atp_file_var.set(data.get('atp_file', ''))
+                self.atp_executable_var.set(data.get('atp_executable', ''))
                 self.enable_risk_var.set(data.get('enable_failure_risk', False))
                 self.risk_base_voltage_var.set(data.get('risk_base_voltage_kv', '429'))
                 self.risk_height_var.set(data.get('risk_height_m', '17.98'))
@@ -343,6 +347,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
                 'atp_file': self.atp_file_var.get(),
+                'atp_executable': self.atp_executable_var.get(),
                 'enable_failure_risk': self.enable_risk_var.get(),
                 'risk_base_voltage_kv': self.risk_base_voltage_var.get(),
                 'risk_height_m': self.risk_height_var.get(),
@@ -745,6 +750,40 @@ class ModernLisAnalysisApp(ctk.CTk):
             width=120
         ).pack(side="left")
 
+        ctk.CTkLabel(
+            atp_card,
+            text="Executável ATP (tpbig.exe ou runATP.exe):",
+        ).pack(anchor="w", padx=15, pady=(0, 0))
+        executable_frame = ctk.CTkFrame(atp_card, fg_color="transparent")
+        executable_frame.pack(fill="x", padx=15, pady=(5, 15))
+
+        self.atp_executable_entry = ctk.CTkEntry(
+            executable_frame,
+            textvariable=self.atp_executable_var,
+            placeholder_text="Busca automática (ou selecione o executável)",
+            width=760,
+        )
+        self.atp_executable_entry.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=(0, 10),
+        )
+
+        ctk.CTkButton(
+            executable_frame,
+            text="Selecionar",
+            command=self._choose_atp_executable,
+            width=120,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            executable_frame,
+            text="Automático",
+            command=self._use_automatic_atp_executable,
+            width=110,
+        ).pack(side="left", padx=(8, 0))
+
         params_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         params_card.pack(fill="x", pady=(0, 15))
         self._sim_params_card = params_card
@@ -1099,6 +1138,78 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._clear_atp_parameter_editor()
             self._load_atp_parameters(show_dialog_errors=False)
             self._save_prefs()
+
+    def _choose_atp_executable(self) -> bool:
+        """Permite selecionar tpbig.exe ou runATP.exe e salva a escolha."""
+        current = self.atp_executable_var.get().strip()
+        initial_dir = str(Path(current).parent) if current else str(Path.home())
+        selected = filedialog.askopenfilename(
+            title="Selecionar executável do ATP",
+            initialdir=initial_dir,
+            filetypes=[
+                ("Executáveis ATP", "tpbig.exe runATP.exe"),
+                ("Executáveis", "*.exe"),
+                ("Todos", "*.*"),
+            ],
+        )
+        if not selected:
+            return False
+
+        try:
+            validated = validate_atp_executable_path(selected)
+        except (FileNotFoundError, ValueError) as exc:
+            self._show_error(
+                "Executável ATP inválido",
+                str(exc),
+                details=[("Arquivo selecionado", selected)],
+            )
+            return False
+
+        self.atp_executable_var.set(str(validated))
+        self._save_prefs()
+        self.log(f"[ATP] Executável selecionado: {validated}")
+        return True
+
+    def _use_automatic_atp_executable(self):
+        """Remove a escolha manual e volta a usar a descoberta automática."""
+        self.atp_executable_var.set("")
+        self._save_prefs()
+        self.log("[ATP] Busca automática de executável habilitada")
+
+    def _resolve_atp_executable_for_run(self) -> tuple[bool, str | None]:
+        """Resolve a preferência ou solicita seleção quando a busca falhar."""
+        configured = self.atp_executable_var.get().strip()
+        if configured:
+            try:
+                validated = validate_atp_executable_path(configured)
+            except (FileNotFoundError, ValueError) as exc:
+                self.atp_executable_var.set("")
+                self._save_prefs()
+                self._show_warning(
+                    "Executável ATP não encontrado",
+                    "O executável salvo não está mais disponível. Selecione-o novamente.",
+                    details=[("Detalhes", str(exc))],
+                )
+            else:
+                normalized = str(validated)
+                if normalized != configured:
+                    self.atp_executable_var.set(normalized)
+                    self._save_prefs()
+                return True, normalized
+
+        if find_available_atp_executable() is not None:
+            return True, None
+
+        self._show_info(
+            "ATP não encontrado",
+            (
+                "A busca automática não encontrou o ATP neste computador. "
+                "Selecione o arquivo tpbig.exe ou runATP.exe da instalação."
+            ),
+        )
+        if not self._choose_atp_executable():
+            return False, None
+        return True, self.atp_executable_var.get().strip()
 
     def _get_atp_file_signature(self, atp_path: Path) -> tuple[str, int, int]:
         """Assinatura do arquivo ATP para invalidar cache quando houver alteração."""
@@ -2333,6 +2444,10 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error("Erro", "Arquivo .atp não encontrado.")
             return
 
+        executable_ready, atp_executable_path = self._resolve_atp_executable_for_run()
+        if not executable_ready:
+            return
+
         if not self._atp_param_rows:
             self._load_atp_parameters(show_dialog_errors=True)
             if not self._atp_param_rows:
@@ -2462,6 +2577,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     cancel_event=self._atp_cancel_event,
                     event_callback=event_callback,
                     max_parallel_runs=parallel_runs,
+                    atp_executable_path=atp_executable_path,
                 )
                 self.after(0, lambda data=summary: self._on_atp_parameter_sweep_finished(data))
             except Exception as exc:
@@ -2474,6 +2590,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
             self._show_error("Erro", "Arquivo .atp não encontrado.")
+            return
+
+        executable_ready, atp_executable_path = self._resolve_atp_executable_for_run()
+        if not executable_ready:
             return
 
         if not self._atp_elements_cache:
@@ -2971,6 +3091,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         status_callback=report_progress,
                         cancel_event=self._atp_cancel_event,
                         progress_callback=report_solver_progress,
+                        atp_executable_path=atp_executable_path,
                     )
                 )
 

@@ -132,6 +132,32 @@ def _discover_atp_executables(
 
     return wrapper, direct
 
+def validate_atp_executable_path(executable_path: str | Path) -> Path:
+    """Valida um executável ATP escolhido manualmente."""
+    candidate = Path(executable_path).expanduser()
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Executável ATP não encontrado: {candidate}")
+
+    if candidate.name.lower() not in {"tpbig.exe", "runatp.exe"}:
+        raise ValueError(
+            "Selecione o arquivo tpbig.exe ou runATP.exe da instalação do ATP."
+        )
+    return candidate.resolve()
+
+
+def find_available_atp_executable() -> Path | None:
+    """Retorna o melhor executável localizado automaticamente, se houver."""
+    wrapper, direct = _discover_atp_executables()
+    if direct is not None and all(
+        (direct.parent / filename).is_file()
+        for filename in ATP_DIRECT_SUPPORT_FILES
+    ):
+        return direct
+    if wrapper is not None:
+        return wrapper
+    return direct
+
+
 def _adaptive_poll_interval(idle_seconds: float) -> float:
     """Define o intervalo de polling com backoff progressivo em periodos ociosos."""
     if idle_seconds < 2.0:
@@ -515,6 +541,7 @@ def _run_atp_solver_in_workspace(
     status_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Any | None = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    atp_executable_path: str | Path | None = None,
 ) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
@@ -617,7 +644,17 @@ def _run_atp_solver_in_workspace(
                 pass
 
     _notify("===== INÍCIO DA SIMULAÇÃO ATP =====")
-    wrapper_executable, direct_executable = _discover_atp_executables()
+    selected_executable = None
+    if atp_executable_path:
+        selected_executable = validate_atp_executable_path(atp_executable_path)
+        if selected_executable.name.lower() == "tpbig.exe":
+            wrapper_executable, direct_executable = None, selected_executable
+        else:
+            wrapper_executable, direct_executable = selected_executable, None
+        _notify(f"Executável ATP selecionado manualmente: {selected_executable}")
+    else:
+        wrapper_executable, direct_executable = _discover_atp_executables()
+
     direct_support_files: list[Path] = []
     use_direct_solver = False
     if direct_executable is not None:
@@ -628,6 +665,10 @@ def _run_atp_solver_in_workspace(
             )
             use_direct_solver = True
         except Exception as exc:
+            if selected_executable is not None:
+                raise RuntimeError(
+                    f"Não foi possível usar o tpbig.exe selecionado: {exc}"
+                ) from exc
             _notify(f"Solver ATP direto indisponível ({exc}). Usando runATP.exe.")
 
     # Mantem compatibilidade com integracoes que interceptam o processo e
@@ -1108,6 +1149,7 @@ def run_atp_solver(
     status_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Any | None = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
+    atp_executable_path: str | Path | None = None,
 ) -> str:
     """Executa o ATP em workspace temporario e devolve apenas resultados validos."""
     source_atp = Path(atp_file_path)
@@ -1134,6 +1176,7 @@ def run_atp_solver(
                 status_callback=status_callback,
                 cancel_event=cancel_event,
                 progress_callback=progress_callback,
+                atp_executable_path=atp_executable_path,
             )
         )
         staged_lis = _stage_atp_results(isolated_atp, generated_lis)

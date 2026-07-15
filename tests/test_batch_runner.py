@@ -91,8 +91,12 @@ class BatchRunnerExecutionTest(unittest.TestCase):
 
             parser_calls: list[tuple[int, float, str]] = []
             events: list[dict] = []
+            selected_executable = root / "runATP.exe"
+            selected_executable.write_bytes(b"wrapper")
+            received_executables: list[str | None] = []
 
             def fake_solver(atp_file_path: str, **_kwargs) -> str:
+                received_executables.append(_kwargs.get("atp_executable_path"))
                 progress_callback = _kwargs.get("progress_callback")
                 if progress_callback is not None:
                     progress_callback(0.42, "Simulando caso 126/300")
@@ -130,8 +134,13 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 lis_parser=fake_lis_parser,
                 solver_runner=fake_solver,
                 event_callback=events.append,
+                atp_executable_path=str(selected_executable),
             )
 
+            self.assertEqual(
+                received_executables,
+                [str(selected_executable)] * 3,
+            )
             progress_events = [
                 event for event in events if event.get("type") == "solver_progress"
             ]

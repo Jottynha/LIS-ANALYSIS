@@ -6,7 +6,6 @@ import sys
 import os
 import subprocess
 import time
-import math
 from datetime import datetime
 from pathlib import Path
 
@@ -229,6 +228,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_active_mode = None
         self._atp_runtime_status_text = "Aguardando execução"
         self._atp_sweep_completed_runs = set()
+        self._atp_sweep_run_progress = {}
         self._atp_sweep_parallel_active = False
 
         # Simulacao ATP (.atp)
@@ -2125,21 +2125,33 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log("[ATP] Cancelamento solicitado pelo usuário")
 
     def _on_atp_sweep_event(self, event: dict):
+        event_type = str(event.get("type", ""))
         message = str(event.get("message", "")).strip()
         if message:
-            self.log(f"[ATP-SWEEP] {message}")
+            if event_type != "solver_progress":
+                self.log(f"[ATP-SWEEP] {message}")
             self.atp_batch_status_var.set(message)
             self._atp_runtime_status_text = message
 
         total_runs = int(event.get("total_runs", 0) or 0)
         run_index = int(event.get("run_index", 0) or 0)
-        event_type = str(event.get("type", ""))
+        if event_type == "solver_progress" and run_index:
+            simulation_progress = max(
+                0.0,
+                min(1.0, float(event.get("simulation_progress", 0.0) or 0.0)),
+            )
+            self._atp_sweep_run_progress[run_index] = simulation_progress
+            progress_status = f"{round(simulation_progress * 100)}% \u2014 {message}"
+            self.atp_batch_status_var.set(progress_status)
+            self._atp_runtime_status_text = progress_status
+
         if self._atp_sweep_parallel_active and event_type in {
             "run_succeeded",
             "run_failed",
             "run_cancelled",
         }:
             self._atp_sweep_completed_runs.add(run_index)
+            self._atp_sweep_run_progress[run_index] = 1.0
 
         if total_runs:
             displayed_runs = (
@@ -2147,12 +2159,24 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if self._atp_sweep_parallel_active
                 else min(run_index, total_runs)
             )
-            self.atp_batch_progress_var.set(f"{displayed_runs} / {total_runs}")
+            if event_type == "solver_progress":
+                if self._atp_sweep_parallel_active:
+                    overall = sum(self._atp_sweep_run_progress.values()) / total_runs
+                else:
+                    overall = float(event.get("progress", 0.0) or 0.0)
+                self.atp_batch_progress_var.set(
+                    f"{displayed_runs} / {total_runs} - {round(overall * 100)}%"
+                )
+            else:
+                self.atp_batch_progress_var.set(f"{displayed_runs} / {total_runs}")
 
         progress = event.get("progress")
         if progress is not None:
             if self._atp_sweep_parallel_active:
-                if event_type in {"run_succeeded", "run_failed"} and total_runs:
+                if event_type == "solver_progress" and total_runs:
+                    aggregate = sum(self._atp_sweep_run_progress.values()) / total_runs
+                    self._set_atp_progress(aggregate)
+                elif event_type in {"run_succeeded", "run_failed"} and total_runs:
                     self._set_atp_progress(len(self._atp_sweep_completed_runs) / total_runs)
                 elif event_type in {"sweep_cancelled", "sweep_finished"}:
                     self._set_atp_progress(max(self._atp_progress_value, float(progress)))
@@ -2360,6 +2384,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self._atp_cancel_event.clear()
         self._atp_sweep_completed_runs.clear()
+        self._atp_sweep_run_progress.clear()
         self.atp_batch_progress_var.set(f"0 / {len(sweep_values)}")
         self.atp_batch_elapsed_var.set("0s")
         self.atp_batch_status_var.set("Preparando sweep")
@@ -2869,6 +2894,15 @@ class ModernLisAnalysisApp(ctk.CTk):
             def report_progress(message: str):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
+            def report_solver_progress(progress: float, detail: str):
+                self.after(
+                    0,
+                    lambda value=progress, text=detail: self._on_atp_solver_progress(
+                        value,
+                        text,
+                    ),
+                )
+
             parametrized_exec_atp = None
             generated_lis_path = None
             execution_atp_path = Path(atp_file)
@@ -2915,6 +2949,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         timeout=self._atp_timeout_sec,
                         status_callback=report_progress,
                         cancel_event=self._atp_cancel_event,
+                        progress_callback=report_solver_progress,
                     )
                 )
 
@@ -3092,15 +3127,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_batch_status_var.set(message)
         self._atp_runtime_status_text = message
 
-        text = message.lower()
-        if "process started" in text:
-            self._set_atp_progress(0.03)
-        elif "process finished" in text:
-            self._set_atp_progress(0.88)
-        elif "waiting for lis generation/stabilization" in text:
-            self._set_atp_progress(0.92)
-        elif "lis ready" in text:
-            self._set_atp_progress(0.98)
+    def _on_atp_solver_progress(self, progress: float, detail: str):
+        # Atualiza a GUI com o andamento medido diretamente no arquivo LIS.
+        if not self._atp_running:
+            return
+        normalized = max(0.0, min(1.0, float(progress)))
+        percent = round(normalized * 100)
+        self._set_atp_progress(normalized)
+        self.atp_batch_progress_var.set(f"{percent}%")
+        status = f"{percent}% \u2014 {detail}"
+        self.atp_batch_status_var.set(status)
+        self._atp_runtime_status_text = status
 
     def _on_atp_simulation_cancelled(self):
         """Restaura a interface após o usuário interromper a simulação."""
@@ -3242,11 +3279,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         elapsed_float = time.time() - self._atp_started_at
         elapsed = int(elapsed_float)
         self.atp_batch_elapsed_var.set(f"{elapsed}s")
-        # Inicia do zero e acelera de forma suave apos o primeiro segundo.
-        base_elapsed = max(0.0, elapsed_float - 1.0)
-        timed_progress = 0.80 * (1.0 - math.exp(-base_elapsed / 45.0))
-        timed_progress = min(0.85, timed_progress)
-        self._set_atp_progress(timed_progress)
         status_text = self._atp_runtime_status_text or "executando"
         self.atp_run_status_var.set(f"Status: {status_text} ({elapsed}s)")
         self.after(1000, self._tick_atp_running_status)

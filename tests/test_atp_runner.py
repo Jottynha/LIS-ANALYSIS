@@ -4,6 +4,7 @@ from lis_analysis.solver.atp_runner import (
     ATP_DIRECT_SUPPORT_FILES,
     _cleanup_direct_solver_support,
     _discover_atp_executables,
+    _extract_lis_simulation_progress,
     _is_atp_temporary_file,
     _is_cancelled_atp_result,
     _lis_has_completion_marker,
@@ -15,6 +16,41 @@ from lis_analysis.solver.atp_runner import (
     iter_staged_atp_artifacts,
     run_atp_solver,
 )
+
+
+def test_extracts_real_progress_from_statistical_simulation():
+    lis_text = """
+Misc. data.  500  1  0  0  1  0  0  1  300  0
+The data case involves NENERG = 300 simulations.
+Random switching times for simulation number  126  :
+"""
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.42
+    assert detail == "Simulando caso 126/300"
+
+
+def test_statistical_progress_starts_at_zero_before_first_case():
+    lis_text = "Misc. data.  500  1  0  0  1  0  0  1  300  0\n"
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.0
+    assert "300" in detail
+
+
+def test_extracts_real_progress_from_non_statistical_time_steps():
+    lis_text = """
+Misc. data.     1.000E-06   1.000E+00   0.000E+00
+   Step      Time      NODE
+ 420000       .42     12.0
+"""
+
+    progress, detail = _extract_lis_simulation_progress(lis_text)
+
+    assert progress == 0.42
+    assert "t=0.42s" in detail
 
 
 def test_lis_completion_marker_requires_final_timing_block(tmp_path: Path):

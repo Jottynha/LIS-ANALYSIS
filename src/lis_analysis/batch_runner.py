@@ -608,12 +608,27 @@ def _execute_sweep_run(
                 run_dir=result.run_dir,
             )
 
+        def _solver_progress_callback(progress: float, detail: str) -> None:
+            normalized = max(0.0, min(1.0, float(progress)))
+            _emit_event(
+                event_callback,
+                type="solver_progress",
+                message=detail,
+                run_index=result.run_index,
+                total_runs=total_runs,
+                value=result.value,
+                simulation_progress=normalized,
+                progress=((result.run_index - 1) + normalized) / total_runs,
+                run_dir=result.run_dir,
+            )
+
         generated_lis_path = Path(
             solver_runner(
                 str(execution_atp_path),
                 timeout=solver_timeout,
                 status_callback=_solver_status_callback,
                 cancel_event=cancel_event,
+                progress_callback=_solver_progress_callback,
             )
         )
 

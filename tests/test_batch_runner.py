@@ -90,8 +90,12 @@ class BatchRunnerExecutionTest(unittest.TestCase):
             )
 
             parser_calls: list[tuple[int, float, str]] = []
+            events: list[dict] = []
 
             def fake_solver(atp_file_path: str, **_kwargs) -> str:
+                progress_callback = _kwargs.get("progress_callback")
+                if progress_callback is not None:
+                    progress_callback(0.42, "Simulando caso 126/300")
                 atp_path = Path(atp_file_path)
                 resistance = self._read_branch_resistance(atp_path)
                 lis_path = atp_path.with_suffix(".lis")
@@ -125,8 +129,16 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 output_dir=output_root,
                 lis_parser=fake_lis_parser,
                 solver_runner=fake_solver,
+                event_callback=events.append,
             )
 
+            progress_events = [
+                event for event in events if event.get("type") == "solver_progress"
+            ]
+            self.assertEqual(len(progress_events), 3)
+            self.assertTrue(
+                all(event.get("simulation_progress") == 0.42 for event in progress_events)
+            )
             self.assertFalse(summary.cancelled)
             self.assertFalse(summary.stopped_on_error)
             self.assertEqual(summary.total_runs, 3)

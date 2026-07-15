@@ -225,6 +225,108 @@ def _lis_has_completion_marker(lis_path: Path) -> bool:
     return has_list_sizes and has_timing_end
 
 
+ATP_FLOAT_PATTERN = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?"
+
+
+def _extract_lis_simulation_progress(text: str) -> tuple[float, str] | None:
+    """Extrai progresso real do tempo simulado ou das rodadas estatisticas."""
+    if not text.strip():
+        return None
+
+    statistical_total_matches = list(
+        re.finditer(
+            r"\bNENERG\s*=\s*(\d+)\s+simulations?\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+    planned_total_match = re.search(
+        r"^Misc\.\s+data\.\s+(?:\d+\s+){8}(\d+)",
+        text,
+        flags=re.MULTILINE,
+    )
+    total = 0
+    if statistical_total_matches:
+        total = int(statistical_total_matches[-1].group(1))
+    elif planned_total_match is not None:
+        total = int(planned_total_match.group(1))
+
+    if total > 0:
+        current_matches = list(
+            re.finditer(
+                r"simulation\s+number\s+(\d+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+        current = int(current_matches[-1].group(1)) if current_matches else 0
+        progress = max(0.0, min(1.0, current / total))
+        if current == 0:
+            return progress, f"Preparando {total} casos estat\u00edsticos"
+        return progress, f"Simulando caso {current}/{total}"
+
+    misc_pattern = re.compile(
+        rf"Misc\.\s+data\.\s+({ATP_FLOAT_PATTERN})\s+({ATP_FLOAT_PATTERN})",
+        flags=re.IGNORECASE,
+    )
+    misc_match = misc_pattern.search(text)
+    if misc_match is None:
+        return None
+
+    try:
+        tmax = float(misc_match.group(2))
+    except ValueError:
+        return None
+    if tmax <= 0:
+        return None
+
+    simulated_times: list[float] = []
+    step_pattern = re.compile(
+        rf"^\s*\d+\s+({ATP_FLOAT_PATTERN})(?:\s|$)",
+        flags=re.MULTILINE,
+    )
+    for match in step_pattern.finditer(text):
+        try:
+            simulated_times.append(float(match.group(1)))
+        except ValueError:
+            continue
+
+    plot_span_pattern = re.compile(
+        rf"Plot\s+timespan.*?=\s*{ATP_FLOAT_PATTERN}\s+({ATP_FLOAT_PATTERN})",
+        flags=re.IGNORECASE,
+    )
+    for match in plot_span_pattern.finditer(text):
+        try:
+            simulated_times.append(float(match.group(1)))
+        except ValueError:
+            continue
+
+    if not simulated_times:
+        return 0.0, "Iniciando passos de tempo"
+
+    current_time = max(0.0, max(simulated_times))
+    progress = max(0.0, min(1.0, current_time / tmax))
+    return progress, f"Simulando t={current_time:g}s de {tmax:g}s"
+
+
+def _read_lis_progress_text(lis_path: Path) -> str:
+    # Le cabecalho e cauda do LIS sem reler arquivos grandes por inteiro.
+    header_bytes = 64 * 1024
+    tail_bytes = 256 * 1024
+    with lis_path.open("rb") as stream:
+        stream.seek(0, 2)
+        size = stream.tell()
+        if size <= header_bytes + tail_bytes:
+            stream.seek(0)
+            data = stream.read()
+        else:
+            stream.seek(0)
+            header = stream.read(header_bytes)
+            stream.seek(-tail_bytes, 2)
+            data = header + b"\n" + stream.read(tail_bytes)
+    return data.decode(errors="replace")
+
+
 def _stage_direct_solver_support(
     working_directory: Path,
     support_directory: Path,
@@ -412,6 +514,7 @@ def _run_atp_solver_in_workspace(
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Any | None = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
@@ -613,6 +716,45 @@ def _run_atp_solver_in_workspace(
     stable_window_with_completion_marker_sec = 0.75
     process_done = False
     process_done_at_monotonic = None
+    last_progress_check_monotonic = 0.0
+    last_reported_progress = -1.0
+    last_progress_detail = ""
+
+    def _report_lis_progress(*, force: bool = False) -> None:
+        nonlocal last_progress_check_monotonic, last_reported_progress, last_progress_detail
+        if progress_callback is None or lis_path is None:
+            return
+
+        now = time.monotonic()
+        if not force and (now - last_progress_check_monotonic) < 0.25:
+            return
+        last_progress_check_monotonic = now
+
+        try:
+            progress_state = _extract_lis_simulation_progress(
+                _read_lis_progress_text(lis_path)
+            )
+        except OSError:
+            return
+        if progress_state is None:
+            return
+
+        progress, detail = progress_state
+        should_report = (
+            force
+            or progress >= 1.0
+            or progress - last_reported_progress >= 0.005
+            or detail != last_progress_detail
+        )
+        if not should_report:
+            return
+
+        last_reported_progress = max(last_reported_progress, progress)
+        last_progress_detail = detail
+        try:
+            progress_callback(last_reported_progress, detail)
+        except Exception:
+            pass
 
     def _update_lis_state(required_stable_window_sec: float) -> bool:
         nonlocal lis_path, last_size, last_change_monotonic
@@ -673,6 +815,7 @@ def _run_atp_solver_in_workspace(
                 stable_window_after_process_sec if process_done else stable_window_running_sec
             )
             lis_stable = _update_lis_state(required_stable_window_sec)
+            _report_lis_progress()
             marker_check_ready = bool(
                 lis_path is not None
                 and last_change_monotonic is not None
@@ -837,6 +980,12 @@ def _run_atp_solver_in_workspace(
     if return_code != 0:
         _notify(f"Aviso: ATP finalizou com codigo {return_code}, mas gerou LIS valido.")
 
+    _report_lis_progress(force=True)
+    if progress_callback is not None:
+        try:
+            progress_callback(1.0, "Simula\u00e7\u00e3o ATP conclu\u00edda")
+        except Exception:
+            pass
     _notify(f"LIS ready: {lis_path}")
 
     return str(lis_path)
@@ -958,6 +1107,7 @@ def run_atp_solver(
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
     cancel_event: Any | None = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> str:
     """Executa o ATP em workspace temporario e devolve apenas resultados validos."""
     source_atp = Path(atp_file_path)
@@ -983,6 +1133,7 @@ def run_atp_solver(
                 timeout=timeout,
                 status_callback=status_callback,
                 cancel_event=cancel_event,
+                progress_callback=progress_callback,
             )
         )
         staged_lis = _stage_atp_results(isolated_atp, generated_lis)

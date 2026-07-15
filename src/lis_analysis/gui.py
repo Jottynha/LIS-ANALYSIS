@@ -218,16 +218,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_started_at = None
         self._atp_timeout_sec = 600
         self._atp_progress_value = 0.0
-        self.atp_run_status_var = tk.StringVar(value="Status: aguardando execucao")
+        self.atp_run_status_var = tk.StringVar(value="Status: aguardando execução")
         self._atp_cancel_event = threading.Event()
         self._atp_active_mode = None
-        self._atp_runtime_status_text = "Aguardando execucao"
+        self._atp_runtime_status_text = "Aguardando execução"
         self._atp_sweep_completed_runs = set()
         self._atp_sweep_parallel_active = False
 
         # Simulacao ATP (.atp)
         self.atp_file_var = tk.StringVar(value='')
-        self.atp_param_status_var = tk.StringVar(value="Nenhum parametro carregado")
+        self.atp_param_status_var = tk.StringVar(value="Nenhum parâmetro carregado")
         self.atp_sweep_parameter_var = tk.StringVar(value="")
         self.atp_sweep_start_var = tk.StringVar(value="")
         self.atp_sweep_stop_var = tk.StringVar(value="")
@@ -369,9 +369,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.tabview.pack(pady=20, padx=20, fill="both", expand=True)
         
         # Criar abas (SEM EMOJIS para evitar segfault em alguns sistemas)
-        self.tabview.add("Configuracoes")
-        self.tabview.add("Analise .lis")
-        self.tabview.add("Simulacao ATP")
+        self.tabview.add("Configurações")
+        self.tabview.add("Análise .lis")
+        self.tabview.add("Simulação ATP")
         self.tabview.add("Logs")
         
         # Popular cada aba
@@ -418,7 +418,7 @@ class ModernLisAnalysisApp(ctk.CTk):
     
     def _build_config_tab(self):
         """Aba de Configurações"""
-        tab = self.tabview.tab("Configuracoes")
+        tab = self.tabview.tab("Configurações")
         
         # Frame scrollable
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
@@ -608,18 +608,18 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _parse_risk_number(raw_value: str, field_name: str) -> float:
         normalized = str(raw_value).strip().replace(",", ".")
         if not normalized:
-            raise ValueError(f"{field_name} nao informado")
+            raise ValueError(f"{field_name} não informado")
         try:
             return float(normalized)
         except ValueError as exc:
-            raise ValueError(f"{field_name} invalido: {raw_value}") from exc
+            raise ValueError(f"{field_name} inválido: {raw_value}") from exc
 
     def _collect_risk_config(self) -> FailureRiskConfig | None:
         if not self.enable_risk_var.get():
             return None
 
         config = FailureRiskConfig(
-            base_voltage_kv=self._parse_risk_number(self.risk_base_voltage_var.get(), "Tensao-base"),
+            base_voltage_kv=self._parse_risk_number(self.risk_base_voltage_var.get(), "Tensão-base"),
             conductor_height_m=self._parse_risk_number(self.risk_height_var.get(), "H"),
             conductor_structure_distance_m=self._parse_risk_number(self.risk_distance_var.get(), "D"),
             tower_width_m=self._parse_risk_number(self.risk_width_var.get(), "S"),
@@ -634,7 +634,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _build_analysis_tab(self):
         """Aba de Análise de Arquivos .lis"""
-        tab = self.tabview.tab("Analise .lis")
+        tab = self.tabview.tab("Análise .lis")
         
         # Frame superior: filtros e botões
         top_frame = ctk.CTkFrame(tab, fg_color="transparent")
@@ -663,7 +663,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         ctk.CTkButton(
             action_frame, 
-            text="Limpar Pasta Saida", 
+            text="Limpar pasta de saída",
             command=self._clear_output_folder,
             width=140,
             fg_color="#FF5722",
@@ -695,8 +695,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.file_selection_vars = {}
     
     def _build_simulation_tab(self):
-        """Aba de Simulacao ATP"""
-        tab = self.tabview.tab("Simulacao ATP")
+        """Aba de Simulação ATP"""
+        tab = self.tabview.tab("Simulação ATP")
 
         scroll_frame = ctk.CTkScrollableFrame(tab, width=1100, height=550)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -735,7 +735,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             params_header,
-            text="Parametros editaveis do .atp",
+            text="Parâmetros editáveis do .atp",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(side="left")
 
@@ -744,7 +744,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkButton(
             params_actions,
-            text="Detectar parametros",
+            text="Detectar parâmetros",
             command=self._load_atp_parameters,
             width=180
         ).pack(side="left")
@@ -758,7 +758,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkButton(
             params_actions,
-            text="Resetar alteracoes",
+            text="Resetar alterações",
             command=self._reset_atp_parameter_changes,
             width=170,
             fg_color="#757575",
@@ -813,13 +813,13 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             sweep_card,
-            text="Execucao em lote (parameter sweep)",
+            text="Execução em lote (parameter sweep)",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
         ctk.CTkLabel(
             sweep_card,
-            text="Escolha um parametro editavel e defina inicio, fim e passo para executar varias simulacoes automaticamente.",
+            text="Escolha um parâmetro editável e defina início, fim e passo para executar várias simulações automaticamente.",
             justify="left",
         ).pack(anchor="w", padx=15, pady=(0, 10))
 
@@ -828,17 +828,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         sweep_grid.grid_columnconfigure(1, weight=1)
         sweep_grid.grid_columnconfigure(3, weight=1)
 
-        ctk.CTkLabel(sweep_grid, text="Parametro do sweep:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        ctk.CTkLabel(sweep_grid, text="Parâmetro do sweep:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
         self.atp_sweep_parameter_menu = ctk.CTkOptionMenu(
             sweep_grid,
-            values=["Nenhum parametro carregado"],
+            values=["Nenhum parâmetro carregado"],
             variable=self.atp_sweep_parameter_var,
             command=self._on_atp_sweep_parameter_selected,
             width=520,
         )
         self.atp_sweep_parameter_menu.grid(row=0, column=1, columnspan=3, sticky="ew", pady=6)
 
-        ctk.CTkLabel(sweep_grid, text="Inicio:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        ctk.CTkLabel(sweep_grid, text="Início:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
         ctk.CTkEntry(sweep_grid, textvariable=self.atp_sweep_start_var, width=160).grid(row=1, column=1, sticky="ew", pady=6)
 
         ctk.CTkLabel(sweep_grid, text="Fim:").grid(row=1, column=2, sticky="w", padx=(18, 10), pady=6)
@@ -852,7 +852,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkCheckBox(
             sweep_options,
-            text="Pos-processar .lis de cada execucao",
+            text="Pós-processar .lis de cada execução",
             variable=self.atp_sweep_parse_lis_var,
         ).pack(side="left")
 
@@ -868,7 +868,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             action_card,
-            text="Executar Simulacao",
+            text="Executar Simulação",
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(anchor="w", padx=15, pady=(15, 10))
 
@@ -934,7 +934,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.simulation_results = ctk.CTkTextbox(scroll_frame, width=1100, height=160)
         self.simulation_results.pack(fill="both", expand=True, pady=(0, 10))
-        self.simulation_results.insert("1.0", "Aguardando execucao da simulacao ATP...\n")
+        self.simulation_results.insert("1.0", "Aguardando execução da simulação ATP...\n")
         self.simulation_results.configure(state="disabled")
         self._apply_atp_params_expand_state()
     
@@ -951,7 +951,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     @staticmethod
     def _write_failure_risk_report(output_dir: Path, context: str, records: list[dict]) -> Path | None:
-        """Grava os resultados de risco em um arquivo proprio na pasta de saida."""
+        """Grava os resultados de risco em um arquivo próprio na pasta de saída."""
         if not records:
             return None
 
@@ -959,7 +959,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         output_dir.mkdir(parents=True, exist_ok=True)
         report_path = output_dir / "risco_de_falha.txt"
         lines = [
-            "RELATORIO DE RISCO DE FALHA",
+            "RELATÓRIO DE RISCO DE FALHA",
             f"Contexto: {context}",
             f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"Resultados: {len(records)}",
@@ -974,14 +974,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                     f"Probabilidade de falha: {risk * 100.0:.8g}%",
                     f"R: {risk:.10e}",
                     f"CFO corrigido: {float(record['corrected_cfo_kv']):.4f} kV",
-                    f"Indice normalizado Z: {float(record['z_score']):.6f}",
-                    f"Sobretensao media: {float(record['mean_overvoltage_kv']):.4f} kV",
-                    f"Desvio-padrao da sobretensao: {float(record['switching_std_kv']):.4f} kV",
+                    f"Índice normalizado Z: {float(record['z_score']):.6f}",
+                    f"Sobretensão média: {float(record['mean_overvoltage_kv']):.4f} kV",
+                    f"Desvio-padrão da sobretensão: {float(record['switching_std_kv']):.4f} kV",
                     "",
                 ]
             )
 
-        report_path.write_text("\n".join(lines), encoding="utf-8")
+        # O BOM garante a detecção correta de UTF-8 em editores do Windows.
+        report_path.write_text("\n".join(lines), encoding="utf-8-sig")
         return report_path
 
     def _build_logs_tab(self):
@@ -1034,7 +1035,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             pass
 
     def _show_main_cancel(self):
-        """Exibe botao de cancelar somente se o widget existir."""
+        """Exibe botão de cancelar somente se o widget existir."""
         if self.cancel_btn is None:
             return
         try:
@@ -1043,7 +1044,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             pass
 
     def _hide_main_cancel(self):
-        """Oculta botao de cancelar somente se o widget existir."""
+        """Oculta botão de cancelar somente se o widget existir."""
         if self.cancel_btn is None:
             return
         try:
@@ -1097,7 +1098,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         return lines
 
     def _clear_atp_parameter_editor(self):
-        """Limpa a lista visual e caches de parametros ATP detectados."""
+        """Limpa a lista visual e caches de parâmetros ATP detectados."""
         for row in self._atp_param_rows:
             job = row.get("_repeat_job")
             if job is None:
@@ -1114,7 +1115,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.parameter_overrides = {}
         self._atp_section_widgets = {}
         self._atp_filter_no_results_label = None
-        self.atp_param_status_var.set("Nenhum parametro carregado")
+        self.atp_param_status_var.set("Nenhum parâmetro carregado")
         self._refresh_atp_sweep_parameter_menu()
 
         if self.atp_params_scroll_frame is None:
@@ -1146,7 +1147,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             )
 
     def _setup_atp_params_scroll_isolation(self):
-        """Isola o scroll da lista de parametros ATP para não mover o scroll da aba."""
+        """Isola o scroll da lista de parâmetros ATP para não mover o scroll da aba."""
         if self.atp_params_scroll_frame is not None:
             targets = [self.atp_params_scroll_frame]
 
@@ -1186,11 +1187,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         return False
 
     def _on_root_mousewheel_for_atp_params(self, event):
-        """Redireciona roda do mouse para o container ATP e bloqueia propagacao para o pai."""
+        """Redireciona roda do mouse para o container ATP e bloqueia propagação para o pai."""
         if self.atp_params_scroll_frame is None:
             return None
 
-        if self.tabview.get() != "Simulacao ATP":
+        if self.tabview.get() != "Simulação ATP":
             return None
 
         widget_under_pointer = getattr(event, "widget", None)
@@ -1332,7 +1333,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if node_matches:
                 return node_matches[0]
 
-        return first_token if first_token else "Nao identificado"
+        return first_token if first_token else "Não identificado"
 
     def _validate_numeric_input(self, new_value: str) -> bool:
         """Validação de entrada para bloquear caracteres inválidos em campos numéricos ATP."""
@@ -1384,12 +1385,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         invalid = sum(1 for row in self._atp_param_rows if bool(row.get("invalid", False)))
 
         if total == 0:
-            self.atp_param_status_var.set("Nenhum parametro carregado")
+            self.atp_param_status_var.set("Nenhum parâmetro carregado")
             return
 
-        status = f"Editaveis: {total} | Alterados: {changed}"
+        status = f"Editáveis: {total} | Alterados: {changed}"
         if invalid:
-            status += f" | Invalidos: {invalid}"
+            status += f" | Inválidos: {invalid}"
         self.atp_param_status_var.set(status)
 
     def _set_atp_row_visual_state(self, row: dict, state: str):
@@ -1527,24 +1528,24 @@ class ModernLisAnalysisApp(ctk.CTk):
         try:
             overrides = self._collect_atp_parameter_overrides()
         except Exception as e:
-            self._show_error("Erro", "Existem valores invalidos no editor ATP.", details=[("Detalhes", str(e))])
+            self._show_error("Erro", "Existem valores inválidos no editor ATP.", details=[("Detalhes", str(e))])
             return
 
         if not overrides:
-            self._show_info("Parametros ATP", "Nenhuma alteracao pendente para aplicar.")
+            self._show_info("Parâmetros ATP", "Nenhuma alteração pendente para aplicar.")
             return
 
-        self.log(f"[ATP] Alteracoes confirmadas na interface: {len(overrides)} parametro(s)")
+        self.log(f"[ATP] Alterações confirmadas na interface: {len(overrides)} parâmetro(s)")
         self._show_success(
-            "Alteracoes aplicadas",
-            "As alteracoes foram registradas e serao usadas no proximo Run Simulation.",
-            details=[("Parametros alterados", str(len(overrides)))],
+            "Alterações aplicadas",
+            "As alterações foram registradas e serão usadas na próxima execução da simulação.",
+            details=[("Parâmetros alterados", str(len(overrides)))],
         )
 
     def _reset_atp_parameter_changes(self):
         """Restaura todos os campos para os valores originais detectados."""
         if not self._atp_param_rows:
-            self._show_info("Parametros ATP", "Nenhum parametro carregado para resetar.")
+            self._show_info("Parâmetros ATP", "Nenhum parâmetro carregado para resetar.")
             return
 
         for row in self._atp_param_rows:
@@ -1557,10 +1558,10 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.parameter_overrides = {}
         self._refresh_atp_param_status()
-        self.log("[ATP] Alteracoes de parametros resetadas para valores originais")
+        self.log("[ATP] Alterações de parâmetros resetadas para valores originais")
 
     def _build_atp_overrides_preview_table(self, overrides: list[dict]) -> str:
-        header = f"{'Elemento':<30} {'Parametro':<22} {'Valor'}"
+        header = f"{'Elemento':<30} {'Parâmetro':<22} {'Valor'}"
         lines = [header, "-" * len(header)]
 
         max_rows = 80
@@ -1572,7 +1573,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             lines.append(f"{name:<30} {parameter:<22} {old_value} -> {new_value}")
 
         if len(overrides) > max_rows:
-            lines.append(f"... +{len(overrides) - max_rows} alteracao(oes) adicionais")
+            lines.append(f"... +{len(overrides) - max_rows} alteração(ões) adicionais")
 
         return "\n".join(lines)
 
@@ -1582,7 +1583,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             return True
 
         dialog = ctk.CTkToplevel(self)
-        dialog.title("Preview de alteracoes ATP")
+        dialog.title("Pré-visualização de alterações ATP")
         dialog.transient(self)
         dialog.resizable(False, False)
         dialog.grab_set()
@@ -1594,14 +1595,14 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         ctk.CTkLabel(
             container,
-            text="Preview de alteracoes antes do Run Simulation",
+            text="Pré-visualização das alterações antes de executar a simulação",
             font=ctk.CTkFont(size=16, weight="bold"),
             anchor="w",
         ).pack(fill="x", padx=12, pady=(12, 6))
 
         ctk.CTkLabel(
             container,
-            text=f"{len(overrides)} parametro(s) alterado(s). Confirma execucao com estas alteracoes?",
+            text=f"{len(overrides)} parâmetro(s) alterado(s). Confirma execução com estas alterações?",
             anchor="w",
             justify="left",
         ).pack(fill="x", padx=12, pady=(0, 8))
@@ -1650,13 +1651,13 @@ class ModernLisAnalysisApp(ctk.CTk):
         return bool(result["confirmed"])
 
     def _load_atp_parameters(self, show_dialog_errors: bool = True):
-        """Lê o .atp atual e monta editor de parametros detectados automaticamente."""
+        """Lê o .atp atual e monta editor de parâmetros detectados automaticamente."""
         atp_file = self.atp_file_var.get().strip()
         atp_path = Path(atp_file)
         if not atp_file or not atp_path.exists():
             self._clear_atp_parameter_editor()
             if show_dialog_errors:
-                self._show_error("Erro", "Arquivo .atp nao encontrado para detectar parametros.")
+                self._show_error("Erro", "Arquivo .atp não encontrado para detectar parâmetros.")
             return
 
         try:
@@ -1676,15 +1677,15 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_original_lines_cache = original_lines
 
         if not editable:
-            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            self.atp_param_status_var.set("Nenhum componente editável detectado")
             self._refresh_atp_sweep_parameter_menu()
             if self.atp_params_scroll_frame is not None:
                 ctk.CTkLabel(
                     self.atp_params_scroll_frame,
-                    text="Nao foram encontrados componentes R/L/C/V/I editaveis neste arquivo.",
+                    text="Não foram encontrados componentes R/L/C/V/I editáveis neste arquivo.",
                     justify="left"
                 ).pack(anchor="w", padx=6, pady=6)
-            self.log("[ATP] Nenhum parametro editavel detectado no .atp selecionado")
+            self.log("[ATP] Nenhum parâmetro editável detectado no .atp selecionado")
             return
 
         group_titles = {
@@ -1873,24 +1874,24 @@ class ModernLisAnalysisApp(ctk.CTk):
                 )
 
         if not self._atp_param_rows:
-            self.atp_param_status_var.set("Nenhum componente editavel detectado")
+            self.atp_param_status_var.set("Nenhum componente editável detectado")
             ctk.CTkLabel(
                 self.atp_params_scroll_frame,
-                text="Nao foram encontrados parametros editaveis para BRANCHES, SWITCHES ou SOURCES.",
+                text="Não foram encontrados parâmetros editáveis para BRANCHES, SWITCHES ou SOURCES.",
                 justify="left",
             ).pack(anchor="w", padx=8, pady=8)
-            self.log("[ATP] Nenhum parametro editavel para interface por elementos")
+            self.log("[ATP] Nenhum parâmetro editável para interface por elementos")
             return
 
         self._refresh_atp_param_status()
         self._apply_atp_parameter_filter()
         self._refresh_atp_sweep_parameter_menu()
         self.log(
-            f"[ATP] Parametros editaveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
+            f"[ATP] Parâmetros editáveis carregados: {len(self._atp_param_rows)} em {total_cards} elemento(s)"
         )
 
     def _collect_atp_parameter_overrides(self) -> list[dict]:
-        """Coleta alterações de parametros ATP digitadas na GUI."""
+        """Coleta alterações de parâmetros ATP digitadas na GUI."""
         overrides = []
         invalid_items = []
 
@@ -1937,7 +1938,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         if invalid_items:
             details = "\n".join(invalid_items[:15])
-            raise ValueError(f"Valores invalidos no editor de parametros ATP:\n{details}")
+            raise ValueError(f"Valores inválidos no editor de parâmetros ATP:\n{details}")
 
         return overrides
 
@@ -1956,7 +1957,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         if not rows:
-            placeholder = "Nenhum parametro carregado"
+            placeholder = "Nenhum parâmetro carregado"
             self.atp_sweep_parameter_menu.configure(values=[placeholder], state="disabled")
             self.atp_sweep_parameter_var.set(placeholder)
             return
@@ -1991,13 +1992,13 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _parse_float_field(self, raw_value: str, field_name: str) -> float:
         raw = raw_value.strip()
         if not raw:
-            raise ValueError(f"{field_name} nao informado")
+            raise ValueError(f"{field_name} não informado")
 
         normalized = raw.replace("D", "E").replace("d", "e")
         try:
             return float(normalized)
         except ValueError as exc:
-            raise ValueError(f"{field_name} invalido: {raw_value}") from exc
+            raise ValueError(f"{field_name} inválido: {raw_value}") from exc
 
     def _postprocess_atp_sweep_lis(
         self,
@@ -2017,7 +2018,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         risk_record = None
 
         if df is None:
-            table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
+            table_warning = "Tabela de distribuição de picos não encontrada no .lis gerado"
             if report_progress is not None:
                 report_progress(f"Aviso: {table_warning}")
         else:
@@ -2030,7 +2031,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
             except Exception as exc:
                 if not hide_errors and report_progress is not None:
-                    report_progress(f"Aviso: falha em estatisticas: {exc}")
+                    report_progress(f"Aviso: falha em estatísticas: {exc}")
 
             risk_config = plot_options.get("risk_config")
             if risk_config is not None and computed_stats is not None:
@@ -2043,7 +2044,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     risk_record = self._failure_risk_record(lis_path.name, result)
                 except Exception as exc:
                     if not hide_errors and report_progress is not None:
-                        report_progress(f"Aviso: falha no calculo de risco: {exc}")
+                        report_progress(f"Aviso: falha no cálculo de risco: {exc}")
 
             if not only_comparative:
                 graph_name = f"grafico_{lis_path.stem}.png"
@@ -2069,7 +2070,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 )
         except Exception as exc:
             if not hide_errors and report_progress is not None:
-                report_progress(f"Aviso: falha em series temporais: {exc}")
+                report_progress(f"Aviso: falha em séries temporais: {exc}")
 
         return {
             "excel_path": str(excel_path) if excel_path else None,
@@ -2085,7 +2086,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         generated_lis: Path | None,
         simulation_dir: Path | None,
     ) -> None:
-        """Remove somente artefatos incompletos da simulacao cancelada."""
+        """Remove somente artefatos incompletos da simulação cancelada."""
         import shutil
 
         if simulation_dir is not None and simulation_dir.exists():
@@ -2104,7 +2105,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _cancel_atp_execution(self):
         if not self._atp_running:
-            self._show_info("Execucao ATP", "Nao existe simulacao ATP em andamento para cancelar.")
+            self._show_info("Execução ATP", "Não existe simulação ATP em andamento para cancelar.")
             return
 
         self._atp_cancel_event.set()
@@ -2113,7 +2114,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_batch_status_var.set("Cancelamento solicitado")
         self._atp_runtime_status_text = "Cancelamento solicitado"
         self.atp_run_status_var.set("Status: cancelamento solicitado")
-        self.log("[ATP] Cancelamento solicitado pelo usuario")
+        self.log("[ATP] Cancelamento solicitado pelo usuário")
 
     def _on_atp_sweep_event(self, event: dict):
         message = str(event.get("message", "")).strip()
@@ -2158,8 +2159,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         )
         lines = [
             f"Sweep finalizado em {summary.elapsed_seconds:.1f}s",
-            f"Parametro: {summary.parameter.display_label}",
-            f"Pasta de saida: {output_label}",
+            f"Parâmetro: {summary.parameter.display_label}",
+            f"Pasta de saída: {output_label}",
             (
                 f"Total: {summary.total_runs} | Sucessos: {summary.success_count} | "
                 f"Falhas: {summary.failure_count} | Canceladas: {summary.cancelled_count} | "
@@ -2168,9 +2169,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         ]
 
         if summary.cancelled:
-            lines.append("Execucao interrompida por cancelamento do usuario.")
+            lines.append("Execução interrompida por cancelamento do usuário.")
         if summary.stopped_on_error:
-            lines.append("Execucao interrompida no primeiro erro, conforme configurado.")
+            lines.append("Execução interrompida no primeiro erro, conforme configurado.")
 
         lines.append("")
         for result in summary.results:
@@ -2201,7 +2202,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 continue
             record = dict(analysis["risk_record"])
             record["label"] = (
-                f"Execucao {run_result.run_index:03d} - "
+                f"Execução {run_result.run_index:03d} - "
                 f"{summary.parameter.display_label} = {run_result.value:g}"
             )
             risk_records.append(record)
@@ -2217,13 +2218,13 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.atp_batch_status_var.set("Sweep cancelado")
             self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
         elif summary.failure_count > 0:
-            self.status_var.set("Sweep concluido com falhas")
-            self.atp_batch_status_var.set("Sweep concluido com falhas")
-            self.atp_run_status_var.set(f"Status: concluido com falhas ({elapsed:.1f}s)")
+            self.status_var.set("Sweep concluído com falhas")
+            self.atp_batch_status_var.set("Sweep concluído com falhas")
+            self.atp_run_status_var.set(f"Status: concluído com falhas ({elapsed:.1f}s)")
         else:
-            self.status_var.set("Sweep concluido")
-            self.atp_batch_status_var.set("Sweep concluido")
-            self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
+            self.status_var.set("Sweep concluído")
+            self.atp_batch_status_var.set("Sweep concluído")
+            self.atp_run_status_var.set(f"Status: concluído ({elapsed:.1f}s)")
 
         self.log(
             f"[ATP-SWEEP] Resumo final: {summary.success_count} sucesso(s), "
@@ -2237,7 +2238,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 log_file.write_text(log_content, encoding="utf-8")
                 self.log(f"[ATP-SWEEP] Log salvo: {log_file.name}")
             except Exception as exc:
-                self.log(f"[ATP-SWEEP] Aviso: nao foi possivel salvar log do sweep: {exc}")
+                self.log(f"[ATP-SWEEP] Aviso: não foi possível salvar log do sweep: {exc}")
 
         if self.open_output_var.get() and summary.output_dir.exists():
             _open_in_file_manager(summary.output_dir)
@@ -2250,33 +2251,33 @@ class ModernLisAnalysisApp(ctk.CTk):
             )
             self._show_warning(
                 "Sweep cancelado",
-                f"O sweep foi interrompido apos {summary.processed_count} execucao(oes) concluida(s).",
+                f"O sweep foi interrompido após {summary.processed_count} execução(ões) concluída(s).",
                 details=[("Resultados", preserved_output)],
             )
         elif summary.failure_count > 0:
             self._show_warning(
-                "Sweep concluido com falhas",
+                "Sweep concluído com falhas",
                 (
-                    f"{summary.success_count} execucao(oes) concluida(s) e "
+                    f"{summary.success_count} execução(ões) concluída(s) e "
                     f"{summary.failure_count} falha(s)."
                 ),
                 details=[("Resultados", str(summary.output_dir))],
             )
         else:
             self._show_success(
-                "Sweep concluido",
-                f"{summary.success_count} execucao(oes) concluida(s) com sucesso.",
+                "Sweep concluído",
+                f"{summary.success_count} execução(ões) concluída(s) com sucesso.",
                 details=[("Resultados", str(summary.output_dir))],
             )
 
     def _run_atp_parameter_sweep(self):
         if self._atp_running:
-            self._show_info("Execucao ATP", "Ja existe uma execucao ATP em andamento.")
+            self._show_info("Execução ATP", "Já existe uma execução ATP em andamento.")
             return
 
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
-            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            self._show_error("Erro", "Arquivo .atp não encontrado.")
             return
 
         if not self._atp_param_rows:
@@ -2287,7 +2288,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         selected_label = self.atp_sweep_parameter_var.get().strip()
         selected_row = self._atp_sweep_parameter_options.get(selected_label)
         if selected_row is None:
-            self._show_error("Erro", "Selecione um parametro valido para o sweep.")
+            self._show_error("Erro", "Selecione um parâmetro válido para o sweep.")
             return
 
         missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
@@ -2296,29 +2297,29 @@ class ModernLisAnalysisApp(ctk.CTk):
             for line_no, target in missing_insert_dependencies[:10]:
                 details.append((f"Linha {line_no}", target))
             self._show_error(
-                "Dependencias ATP ausentes",
-                "Nao e possivel iniciar o sweep. Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s).",
+                "Dependências ATP ausentes",
+                "Não é possível iniciar o sweep. Arquivo(s) auxiliar(es) de $INSERT não encontrado(s).",
                 details=details,
             )
             return
 
         outdir_str = self.outdir_var.get().strip()
         if not outdir_str:
-            self._show_error("Erro", "Pasta de saida nao informada.")
+            self._show_error("Erro", "Pasta de saída não informada.")
             return
 
         try:
             pending_overrides = self._collect_atp_parameter_overrides()
         except Exception as exc:
-            self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(exc))])
+            self._show_error("Erro", "Não foi possível validar parâmetros ATP.", details=[("Detalhes", str(exc))])
             return
 
         if pending_overrides:
             confirm = messagebox.askyesno(
-                "Ignorar alteracoes manuais",
+                "Ignorar alterações manuais",
                 (
-                    "A execucao em lote altera somente o parametro selecionado para o sweep.\n\n"
-                    "As alteracoes manuais pendentes no editor ATP serao ignoradas nesta execucao.\n\n"
+                    "A execução em lote altera somente o parâmetro selecionado para o sweep.\n\n"
+                    "As alterações manuais pendentes no editor ATP serão ignoradas nesta execução.\n\n"
                     "Deseja continuar?"
                 ),
             )
@@ -2326,13 +2327,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                 return
 
         try:
-            start = self._parse_float_field(self.atp_sweep_start_var.get(), "Inicio")
+            start = self._parse_float_field(self.atp_sweep_start_var.get(), "Início")
             stop = self._parse_float_field(self.atp_sweep_stop_var.get(), "Fim")
             step = self._parse_float_field(self.atp_sweep_step_var.get(), "Passo")
             sweep_values = generate_sweep_values(start, stop, step)
             risk_config = self._collect_risk_config()
         except Exception as exc:
-            self._show_error("Erro", "Configuracao invalida para o sweep.", details=[("Detalhes", str(exc))])
+            self._show_error("Erro", "Configuração inválida para o sweep.", details=[("Detalhes", str(exc))])
             return
 
         show_plots = self.show_plots_var.get()
@@ -2415,17 +2416,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _export_atp_parameters_txt(self):
-        """Exporta para TXT todos os parametros ATP detectados para conferência manual."""
+        """Exporta para TXT todos os parâmetros ATP detectados para conferência manual."""
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
-            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            self._show_error("Erro", "Arquivo .atp não encontrado.")
             return
 
         if not self._atp_elements_cache:
             self._load_atp_parameters(show_dialog_errors=False)
 
         if not self._atp_elements_cache:
-            self._show_warning("Aviso", "Nenhum parametro detectado para exportar.")
+            self._show_warning("Aviso", "Nenhum parâmetro detectado para exportar.")
             return
 
         editable = get_editable_parameters(self._atp_elements_cache)
@@ -2438,7 +2439,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         default_name = f"{atp_path.stem}_parametros_detectados.txt"
 
         target = filedialog.asksaveasfilename(
-            title="Salvar parametros detectados",
+            title="Salvar parâmetros detectados",
             defaultextension=".txt",
             initialfile=default_name,
             filetypes=[("Texto", "*.txt"), ("Todos", "*.*")],
@@ -2447,12 +2448,12 @@ class ModernLisAnalysisApp(ctk.CTk):
             return
 
         lines = [
-            "RELATORIO DE PARAMETROS ATP DETECTADOS",
+            "RELATÓRIO DE PARÂMETROS ATP DETECTADOS",
             f"Arquivo: {atp_path}",
             f"Gerado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             f"Total de elementos detectados: {len(self._atp_elements_cache)}",
-            f"Total de parametros editaveis: {len(editable)}",
+            f"Total de parâmetros editáveis: {len(editable)}",
             "",
         ]
 
@@ -2465,7 +2466,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
             element_params = [p for p in editable if int(p.get("element_index", -1)) == idx]
             if not element_params:
-                lines.append("  (sem parametros editaveis)")
+                lines.append("  (sem parâmetros editáveis)")
                 lines.append("")
                 continue
 
@@ -2475,7 +2476,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 detected = param.get("value")
                 current = current_values.get((line_index, field), "")
                 current_display = current if current != "" else str(detected)
-                status = "editavel" if bool(param.get("editable", True)) else "valor_padrao"
+                status = "editável" if bool(param.get("editable", True)) else "valor padrão"
                 lines.append(f"  - {label} [{field}]")
                 lines.append(f"    status: {status}")
                 lines.append(f"    detectado: {detected}")
@@ -2485,10 +2486,10 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         try:
             Path(target).write_text("\n".join(lines), encoding="utf-8")
-            self.log(f"[ATP] TXT de parametros exportado: {target}")
-            self._show_success("Sucesso", "TXT de parametros exportado com sucesso.", details=[("Arquivo", target)])
+            self.log(f"[ATP] TXT de parâmetros exportado: {target}")
+            self._show_success("Sucesso", "TXT de parâmetros exportado com sucesso.", details=[("Arquivo", target)])
         except Exception as e:
-            self._show_error("Erro", "Falha ao salvar TXT de parametros.", details=[("Detalhes", str(e))])
+            self._show_error("Erro", "Falha ao salvar TXT de parâmetros.", details=[("Detalhes", str(e))])
     
     
     def _clear_filter(self):
@@ -2595,7 +2596,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.log_textbox.configure(state="disabled")
 
     def _trim_log_if_needed(self):
-        """Mantem apenas as ultimas linhas do log para evitar crescimento indefinido."""
+        """Mantém apenas as últimas linhas do log para evitar crescimento indefinido."""
         try:
             line_idx = self.log_textbox.index("end-1c")
             line_count = int(line_idx.split(".")[0])
@@ -2606,7 +2607,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             pass
 
     def _show_styled_dialog(self, title: str, message: str, level: str = "info", details: list | None = None):
-        """Exibe dialogo modal customizado com layout mais organizado que messagebox."""
+        """Exibe diálogo modal customizado com layout mais organizado que messagebox."""
         palette = {
             "info": {"accent": "#2563eb"},
             "success": {"accent": "#15803d"},
@@ -2777,12 +2778,12 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _run_atp_simulation(self):
         """Executa o solver ATP em background e atualiza a GUI ao finalizar."""
         if self._atp_running:
-            self._show_info("Simulacao ATP", "Ja existe uma simulacao ATP em andamento.")
+            self._show_info("Simulação ATP", "Já existe uma simulação ATP em andamento.")
             return
 
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
-            self._show_error("Erro", "Arquivo .atp nao encontrado.")
+            self._show_error("Erro", "Arquivo .atp não encontrado.")
             return
 
         missing_insert_dependencies = get_missing_insert_dependencies(atp_file)
@@ -2791,32 +2792,32 @@ class ModernLisAnalysisApp(ctk.CTk):
             preview = missing_insert_dependencies[:preview_limit]
             details = [
                 ("Arquivo ATP", atp_file),
-                ("Diretorio base", str(Path(atp_file).parent)),
-                ("Dependencias ausentes", str(len(missing_insert_dependencies))),
+                ("Diretório base", str(Path(atp_file).parent)),
+                ("Dependências ausentes", str(len(missing_insert_dependencies))),
             ]
             for line_no, target in preview:
                 details.append((f"Linha {line_no}", target))
             if len(missing_insert_dependencies) > preview_limit:
                 details.append(("Outros", f"+{len(missing_insert_dependencies) - preview_limit} item(ns)"))
 
-            self.log("Validacao pre-run ATP falhou: dependencia(s) $INSERT ausente(s).")
+            self.log("Validação pré-execução ATP falhou: dependência(s) $INSERT ausente(s).")
             for line_no, target in missing_insert_dependencies:
                 self.log(f" - Linha {line_no}: {target}")
 
             self._update_simulation_results(
-                "Falha na validacao pre-run ATP:\n"
+                "Falha na validação pré-execução ATP:\n"
                 + "\n".join([f"- Linha {line_no}: {target}" for line_no, target in missing_insert_dependencies])
             )
             self._show_error(
-                "Dependencias ATP ausentes",
-                "Nao e possivel iniciar a simulacao. Arquivo(s) auxiliar(es) de $INSERT nao encontrado(s).",
+                "Dependências ATP ausentes",
+                "Não é possível iniciar a simulação. Arquivo(s) auxiliar(es) de $INSERT não encontrado(s).",
                 details=details,
             )
             return
 
         outdir_str = self.outdir_var.get().strip()
         if not outdir_str:
-            self._show_error("Erro", "Pasta de saida nao informada.")
+            self._show_error("Erro", "Pasta de saída não informada.")
             return
 
         show_plots = self.show_plots_var.get()
@@ -2827,7 +2828,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         except ValueError as exc:
             self._show_error(
                 "Risco de falha",
-                "Os parametros do calculo de risco sao invalidos.",
+                "Os parâmetros do cálculo de risco são inválidos.",
                 details=[("Detalhes", str(exc))],
             )
             return
@@ -2844,17 +2845,17 @@ class ModernLisAnalysisApp(ctk.CTk):
         try:
             atp_overrides = self._collect_atp_parameter_overrides()
         except Exception as e:
-            self._show_error("Erro", "Nao foi possivel validar parametros ATP.", details=[("Detalhes", str(e))])
+            self._show_error("Erro", "Não foi possível validar parâmetros ATP.", details=[("Detalhes", str(e))])
             return
 
         if atp_overrides and not self._confirm_atp_overrides_preview(atp_overrides):
-            self.log("[ATP] Execucao cancelada pelo usuario no preview de alteracoes")
+            self.log("[ATP] Execução cancelada pelo usuário no preview de alterações")
             return
 
         self._set_atp_feedback_running(mode="single", total_runs=1)
-        self.status_var.set("Executando simulacao ATP...")
-        self.log(f"Iniciando simulacao ATP para: {atp_file}")
-        self._update_simulation_results("Executando simulacao ATP e pos-processamento... aguarde.\n")
+        self.status_var.set("Executando simulação ATP...")
+        self.log(f"Iniciando simulação ATP para: {atp_file}")
+        self._update_simulation_results("Executando simulação ATP e pós-processamento... aguarde.\n")
 
         def worker():
             def report_progress(message: str):
@@ -2910,7 +2911,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 )
 
                 if self._atp_cancel_event.is_set():
-                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                    raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
                 report_progress("Preparing output folder...")
                 base_outdir = Path(outdir_str)
@@ -2954,7 +2955,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
                 if self._atp_cancel_event.is_set():
-                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                    raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
                 report_progress("Parsing LIS and generating tables...")
                 parsed = parse_lis_once(lis_target, verbose=False)
@@ -2963,7 +2964,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 table_warning = None
                 risk_records = []
                 if df is None:
-                    table_warning = "Tabela de distribuicao de picos nao encontrada no .lis gerado"
+                    table_warning = "Tabela de distribuição de picos não encontrada no .lis gerado"
                     report_progress(f"Warning: {table_warning}")
                 else:
                     excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
@@ -2975,7 +2976,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
                     except Exception as e:
                         if not hide_errors:
-                            report_progress(f"Warning: falha em estatisticas: {e}")
+                            report_progress(f"Warning: falha em estatísticas: {e}")
 
                     if risk_config is not None and computed_stats is not None:
                         try:
@@ -2989,7 +2990,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                             )
                         except Exception as exc:
                             if not hide_errors:
-                                report_progress(f"Warning: falha no calculo de risco: {exc}")
+                                report_progress(f"Warning: falha no cálculo de risco: {exc}")
 
                     if not only_comparative:
                         report_progress("Generating chart from analyzed data...")
@@ -3005,7 +3006,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         report_progress("Skipping individual chart (only comparative option enabled).")
 
                 if self._atp_cancel_event.is_set():
-                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                    raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
                 report_progress("Processing time series...")
                 try:
@@ -3022,18 +3023,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                         )
                 except Exception as e:
                     if not hide_errors:
-                        report_progress(f"Warning: falha em series temporais: {e}")
+                        report_progress(f"Warning: falha em séries temporais: {e}")
 
                 if self._atp_cancel_event.is_set():
-                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                    raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
                 risk_report_path = self._write_failure_risk_report(
                     sim_outdir,
-                    "Simulacao ATP",
+                    "Simulação ATP",
                     risk_records,
                 )
                 if self._atp_cancel_event.is_set():
-                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+                    raise ATPExecutionCancelled("Simulação ATP cancelada pelo usuário")
 
                 payload = {
                     "lis_path": str(lis_target),
@@ -3081,18 +3082,18 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._set_atp_progress(0.98)
 
     def _on_atp_simulation_cancelled(self):
-        """Restaura a interface apos o usuario interromper a simulacao."""
+        """Restaura a interface após o usuário interromper a simulação."""
         elapsed = self._set_atp_feedback_finished(success=False, final_progress=self._atp_progress_value)
-        self.status_var.set("Simulacao cancelada")
-        self.atp_batch_status_var.set("Simulacao cancelada")
+        self.status_var.set("Simulação cancelada")
+        self.atp_batch_status_var.set("Simulação cancelada")
         self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
-        self.log(f"Simulacao ATP cancelada apos {elapsed:.1f}s")
+        self.log(f"Simulação ATP cancelada após {elapsed:.1f}s")
         self._update_simulation_results(
-            f"Simulacao ATP cancelada pelo usuario apos {elapsed:.1f}s."
+            f"Simulação ATP cancelada pelo usuário após {elapsed:.1f}s."
         )
 
     def _on_atp_simulation_finished(self, success: bool, payload):
-        """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
+        """Atualiza a GUI quando a simulação ATP termina (thread principal)."""
         elapsed = self._set_atp_feedback_finished(success=success)
 
         if success:
@@ -3103,17 +3104,17 @@ class ModernLisAnalysisApp(ctk.CTk):
             risk_report_path = payload.get("risk_report_path") if isinstance(payload, dict) else None
             self.status_var.set("Simulation completed")
             self.atp_batch_progress_var.set("1 / 1")
-            self.atp_batch_status_var.set("Simulacao concluida")
-            self.log(f"Simulacao concluida. LIS gerado em: {lis_path}")
+            self.atp_batch_status_var.set("Simulação concluída")
+            self.log(f"Simulação concluída. LIS gerado em: {lis_path}")
             if outdir:
-                self.log(f"Resultados da analise salvos em: {outdir}")
+                self.log(f"Resultados da análise salvos em: {outdir}")
             if overrides_count:
-                self.log(f"Parametros ATP aplicados nesta execucao: {overrides_count}")
+                self.log(f"Parâmetros ATP aplicados nesta execução: {overrides_count}")
             if table_warning:
                 self.log(f"Aviso: {table_warning}")
 
             self._update_simulation_results(
-                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(nao informado)'}\nParameter overrides: {overrides_count}"
+                f"Simulation completed in {elapsed:.1f}s\nLIS file: {lis_path}\nOutput folder: {outdir if outdir else '(não informado)'}\nParameter overrides: {overrides_count}"
                 + (f"\nRisk report: {risk_report_path}" if risk_report_path else "")
                 + (f"\nWarning: {table_warning}" if table_warning else "")
             )
@@ -3125,23 +3126,23 @@ class ModernLisAnalysisApp(ctk.CTk):
                     log_file.write_text(log_content, encoding="utf-8")
                     self.log(f"Log salvo: {log_file.name}")
                 except Exception as e:
-                    self.log(f"Aviso: nao foi possivel salvar log da simulacao ATP: {e}")
+                    self.log(f"Aviso: não foi possível salvar log da simulação ATP: {e}")
 
             if self.open_output_var.get() and outdir:
                 _open_in_file_manager(Path(outdir))
 
             self._show_success(
-                "Simulacao concluida",
-                f"Simulacao finalizada em {elapsed:.1f}s.",
+                "Simulação concluída",
+                f"Simulação finalizada em {elapsed:.1f}s.",
                 details=[
-                    ("Resultados", outdir if outdir else "(nao informado)"),
+                    ("Resultados", outdir if outdir else "(não informado)"),
                 ],
             )
         else:
             self.status_var.set("Pronto")
             error_msg = str(payload)
             self.atp_batch_progress_var.set("0 / 1")
-            self.atp_batch_status_var.set("Erro na simulacao")
+            self.atp_batch_status_var.set("Erro na simulação")
             details = [("Detalhes", error_msg)]
 
             marker = "Trecho do LIS:"
@@ -3152,18 +3153,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if excerpt_text:
                     details.append(("Trecho do LIS", excerpt_text))
 
-            self.log(f"Erro na simulacao ATP: {error_msg}")
+            self.log(f"Erro na simulação ATP: {error_msg}")
             self._update_simulation_results(
-                f"Erro na simulacao ATP apos {elapsed:.1f}s:\n{error_msg}"
+                f"Erro na simulação ATP após {elapsed:.1f}s:\n{error_msg}"
             )
             self._show_error(
-                "Erro na simulacao ATP",
-                f"Falha apos {elapsed:.1f}s.",
+                "Erro na simulação ATP",
+                f"Falha após {elapsed:.1f}s.",
                 details=details,
             )
 
     def _set_atp_feedback_running(self, mode: str = "single", total_runs: int = 1):
-        """Ativa indicadores visuais de simulacao ATP em andamento."""
+        """Ativa indicadores visuais de simulação ATP em andamento."""
         # Reset explicito para nova simulacao (evita manter 100% da execucao anterior).
         self._atp_running = False
         self._set_atp_progress(0.0)
@@ -3206,14 +3207,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_batch_elapsed_var.set(f"{elapsed:.1f}s")
 
         if success:
-            self.atp_run_status_var.set(f"Status: concluido ({elapsed:.1f}s)")
+            self.atp_run_status_var.set(f"Status: concluído ({elapsed:.1f}s)")
         else:
             self.atp_run_status_var.set(f"Status: erro ({elapsed:.1f}s)")
 
         return elapsed
 
     def _tick_atp_running_status(self):
-        """Atualiza o status de tempo da execucao ATP a cada segundo."""
+        """Atualiza o status de tempo da execução ATP a cada segundo."""
         if not self._atp_running or self._atp_started_at is None:
             return
 
@@ -3230,7 +3231,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.after(1000, self._tick_atp_running_status)
 
     def _set_atp_progress(self, value: float):
-        """Define progresso ATP entre 0 e 1, sem retroceder durante execucao."""
+        """Define progresso ATP entre 0 e 1, sem retroceder durante execução."""
         clamped = max(0.0, min(1.0, float(value)))
         if self._atp_running:
             self._atp_progress_value = max(self._atp_progress_value, clamped)
@@ -3239,7 +3240,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_progress.set(self._atp_progress_value)
 
     def _update_simulation_results(self, text: str):
-        """Atualiza area de resultados da simulacao"""
+        """Atualiza área de resultados da simulação"""
         self.simulation_results.configure(state="normal")
         self.simulation_results.delete("1.0", "end")
         self.simulation_results.insert("1.0", text)
@@ -3379,7 +3380,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         except ValueError as exc:
             self._show_error(
                 "Risco de falha",
-                "Parametros invalidos para o calculo do risco.",
+                "Parâmetros inválidos para o cálculo do risco.",
                 details=[("Detalhes", str(exc))],
             )
             return
@@ -3460,7 +3461,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                                 0,
                                 lambda msg=error_msg: self._show_warning(
                                     "Aviso",
-                                    "Falha ao calcular estatisticas.",
+                                    "Falha ao calcular estatísticas.",
                                     details=[("Detalhes", msg)],
                                 ),
                             )
@@ -3515,7 +3516,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if risk_records:
                     self._write_failure_risk_report(
                         outdir,
-                        "Analise de arquivos LIS",
+                        "Análise de arquivos LIS",
                         risk_records,
                     )
                 self._set_main_progress(1.0)
@@ -3528,7 +3529,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.after(
                     0,
                     lambda total=len(selected_files), result_outdir=str(outdir): self._show_success(
-                        "Processamento concluido",
+                        "Processamento concluído",
                         f"{total} arquivo(s) processado(s) com sucesso.",
                         details=[("Resultados", result_outdir)],
                     ),

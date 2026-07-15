@@ -12,7 +12,11 @@ from typing import Any, Callable, Mapping
 
 from .atp_parser import parse_atp_file_cached
 from .atp_writer import apply_parameter_overrides
-from .solver.atp_runner import run_atp_solver
+from .solver.atp_runner import (
+    cleanup_staged_atp_result,
+    iter_staged_atp_artifacts,
+    run_atp_solver,
+)
 
 SweepEventCallback = Callable[[dict[str, Any]], None]
 SweepLisParser = Callable[[Path, Path, float, int, int], Any]
@@ -681,6 +685,7 @@ def _execute_sweep_run(
             error=result.error,
         )
     finally:
+        cleanup_staged_atp_result(generated_lis_path)
         if workspace_dir is not None:
             shutil.rmtree(workspace_dir, ignore_errors=True)
 
@@ -844,9 +849,24 @@ def _relocate_run_artifacts(
         relocated_atp = _move_or_copy(execution_atp_path, atp_target)
         moved_sources.add(execution_atp_path.resolve())
 
+    staged_artifacts = (
+        iter_staged_atp_artifacts(generated_lis_path)
+        if generated_lis_path is not None
+        else ()
+    )
     if generated_lis_path is not None and generated_lis_path.exists() and lis_target is not None:
         relocated_lis = _move_or_copy(generated_lis_path, lis_target)
         moved_sources.add(generated_lis_path.resolve())
+
+    for sidecar in staged_artifacts:
+        if generated_lis_path is not None and sidecar == generated_lis_path:
+            continue
+        if not sidecar.exists():
+            continue
+        sidecar_target = run_dir / f"{param_stem}{sidecar.suffix}"
+        _move_or_copy(sidecar, sidecar_target)
+
+    cleanup_staged_atp_result(generated_lis_path)
 
     for sidecar in execution_atp_path.parent.glob(f"{execution_atp_path.stem}.*"):
         try:

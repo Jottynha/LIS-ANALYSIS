@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ ATP_DIRECT_SUPPORT_FILES = (
     "listsize.big",
 )
 LIS_TAIL_READ_BYTES = 64 * 1024
+ATP_RESULT_STAGING_PREFIX = "lis_analysis_atp_result_"
+ATP_WORKSPACE_PREFIX = "lis_analysis_atp_workspace_"
 
 
 class ATPExecutionCancelled(RuntimeError):
@@ -404,7 +407,7 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
         pass
 
 
-def run_atp_solver(
+def _run_atp_solver_in_workspace(
     atp_file_path: str,
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
@@ -837,3 +840,154 @@ def run_atp_solver(
     _notify(f"LIS ready: {lis_path}")
 
     return str(lis_path)
+
+
+def _isolated_workspace_destination(workspace_root: Path, source: Path) -> Path:
+    """Mapeia um caminho absoluto sem alterar a estrutura usada por includes relativos."""
+    resolved = source.resolve()
+    anchor_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.anchor).strip("_")
+    if not anchor_label:
+        anchor_label = "root"
+
+    relative_parts = resolved.parts[1:] if resolved.anchor else resolved.parts
+    return workspace_root / "files" / anchor_label / Path(*relative_parts)
+
+
+def _prepare_isolated_workspace(atp_path: Path) -> tuple[Path, Path]:
+    """Copia o ATP e todos os $INSERT relativos para um workspace exclusivo."""
+    source_atp = atp_path.resolve()
+    workspace_root = Path(tempfile.mkdtemp(prefix=ATP_WORKSPACE_PREFIX))
+    pending = [source_atp]
+    copied: dict[Path, Path] = {}
+
+    try:
+        while pending:
+            source = pending.pop()
+            source = source.resolve()
+            if source in copied:
+                continue
+            if not source.is_file():
+                raise FileNotFoundError(f"Dependencia ATP nao encontrada: {source}")
+
+            destination = _isolated_workspace_destination(workspace_root, source)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            copied[source] = destination
+
+            for line_no, target in _parse_insert_targets(source):
+                normalized = target.replace("\\", "/")
+                is_windows_absolute = re.match(r"^[A-Za-z]:[\\/]", target) is not None
+                target_path = Path(normalized)
+
+                # Includes absolutos permanecem apontando para a instalacao/projeto
+                # original. Eles sao somente leitura para o ATP.
+                if is_windows_absolute or target_path.is_absolute():
+                    resolved = _resolve_insert_target_path(source.parent, target)
+                    if resolved is None:
+                        raise FileNotFoundError(
+                            f"$INSERT nao encontrado em {source.name}, linha {line_no}: {target}"
+                        )
+                    continue
+
+                dependency = (source.parent / target_path).resolve()
+                if not dependency.is_file():
+                    raise FileNotFoundError(
+                        f"$INSERT nao encontrado em {source.name}, linha {line_no}: {target}"
+                    )
+                pending.append(dependency)
+
+        return workspace_root, copied[source_atp]
+    except Exception:
+        shutil.rmtree(workspace_root, ignore_errors=True)
+        raise
+
+
+def _stage_atp_results(executed_atp: Path, generated_lis: Path) -> Path:
+    """Preserva resultados validos fora do workspace antes de remove-lo."""
+    staging_dir = Path(tempfile.mkdtemp(prefix=ATP_RESULT_STAGING_PREFIX))
+    try:
+        staged_lis = staging_dir / generated_lis.name
+        shutil.copy2(generated_lis, staged_lis)
+
+        stems = {executed_atp.stem.lower(), generated_lis.stem.lower()}
+        for candidate in executed_atp.parent.iterdir():
+            if (
+                candidate.is_file()
+                and candidate.stem.lower() in stems
+                and candidate.suffix.lower() in {".pl4", ".dbg"}
+            ):
+                shutil.copy2(candidate, staging_dir / candidate.name)
+        return staged_lis
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+
+
+def is_staged_atp_result(path: Path | str) -> bool:
+    candidate = Path(path)
+    staging_parent = candidate.parent
+    try:
+        system_temp = Path(tempfile.gettempdir()).resolve()
+        return (
+            staging_parent.name.startswith(ATP_RESULT_STAGING_PREFIX)
+            and staging_parent.resolve().parent == system_temp
+        )
+    except OSError:
+        return False
+
+
+def iter_staged_atp_artifacts(lis_path: Path | str) -> tuple[Path, ...]:
+    """Lista LIS e sidecars pertencentes ao mesmo resultado temporariamente preservado."""
+    candidate = Path(lis_path)
+    if not is_staged_atp_result(candidate) or not candidate.parent.is_dir():
+        return (candidate,) if candidate.exists() else ()
+    return tuple(path for path in candidate.parent.iterdir() if path.is_file())
+
+
+def cleanup_staged_atp_result(path: Path | str | None) -> None:
+    """Remove com seguranca apenas o diretorio de staging criado por este modulo."""
+    if path is None:
+        return
+    candidate = Path(path)
+    if is_staged_atp_result(candidate):
+        shutil.rmtree(candidate.parent, ignore_errors=True)
+
+
+def run_atp_solver(
+    atp_file_path: str,
+    timeout: int = 600,
+    status_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Any | None = None,
+) -> str:
+    """Executa o ATP em workspace temporario e devolve apenas resultados validos."""
+    source_atp = Path(atp_file_path)
+    if not source_atp.is_file():
+        raise FileNotFoundError(f"Arquivo .atp nao encontrado: {atp_file_path}")
+
+    def notify(message: str) -> None:
+        if status_callback is not None:
+            try:
+                status_callback(message)
+            except Exception:
+                pass
+
+    workspace_root: Path | None = None
+    try:
+        notify("Preparando workspace isolado da simulacao ATP...")
+        workspace_root, isolated_atp = _prepare_isolated_workspace(source_atp)
+        notify(f"Workspace isolado pronto: {workspace_root}")
+
+        generated_lis = Path(
+            _run_atp_solver_in_workspace(
+                str(isolated_atp),
+                timeout=timeout,
+                status_callback=status_callback,
+                cancel_event=cancel_event,
+            )
+        )
+        staged_lis = _stage_atp_results(isolated_atp, generated_lis)
+        notify("Resultados validos preservados; limpando workspace isolado...")
+        return str(staged_lis)
+    finally:
+        if workspace_root is not None:
+            shutil.rmtree(workspace_root, ignore_errors=True)

@@ -15,7 +15,13 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 
 from .batch_runner import SweepParameterRef, generate_sweep_values, run_parameter_sweep
-from .solver.atp_runner import ATPExecutionCancelled, run_atp_solver, get_missing_insert_dependencies
+from .solver.atp_runner import (
+    ATPExecutionCancelled,
+    cleanup_staged_atp_result,
+    get_missing_insert_dependencies,
+    iter_staged_atp_artifacts,
+    run_atp_solver,
+)
 from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from .atp_writer import write_atp_file
 from .failure_risk import FailureRiskConfig, FailureRiskResult, calculate_failure_risk
@@ -2091,11 +2097,13 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         if simulation_dir is not None and simulation_dir.exists():
             shutil.rmtree(simulation_dir, ignore_errors=True)
-        if generated_lis is not None and generated_lis.exists():
-            try:
-                generated_lis.unlink()
-            except OSError:
-                pass
+        if generated_lis is not None:
+            cleanup_staged_atp_result(generated_lis)
+            if generated_lis.exists():
+                try:
+                    generated_lis.unlink()
+                except OSError:
+                    pass
 
         if execution_atp != source_atp and execution_atp.exists():
             try:
@@ -2920,6 +2928,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 sim_outdir = base_outdir / timestamp
                 sim_outdir.mkdir(parents=True, exist_ok=True)
 
+                staged_artifacts = iter_staged_atp_artifacts(generated_lis_path)
                 lis_target = sim_outdir / generated_lis_path.name
                 if lis_target.exists():
                     lis_target = sim_outdir / f"{generated_lis_path.stem}_{timestamp}{generated_lis_path.suffix}"
@@ -2928,8 +2937,19 @@ class ModernLisAnalysisApp(ctk.CTk):
                     if generated_lis_path.resolve() != lis_target.resolve():
                         lis_target = Path(shutil.move(str(generated_lis_path), str(lis_target)))
                 except Exception:
-                    # Se mover falhar, segue com o .lis no caminho original.
+                    # Se mover falhar, segue com o .lis no caminho de staging.
                     lis_target = generated_lis_path
+
+                for artifact in staged_artifacts:
+                    if artifact == generated_lis_path or not artifact.exists():
+                        continue
+                    artifact_target = sim_outdir / artifact.name
+                    if artifact_target.exists():
+                        artifact_target = sim_outdir / (
+                            f"{artifact.stem}_{timestamp}{artifact.suffix}"
+                        )
+                    shutil.move(str(artifact), str(artifact_target))
+                cleanup_staged_atp_result(generated_lis_path)
 
                 generated_atp_snapshot = None
                 if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
@@ -3057,6 +3077,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
             finally:
+                cleanup_staged_atp_result(generated_lis_path)
                 if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
                     try:
                         parametrized_exec_atp.unlink()

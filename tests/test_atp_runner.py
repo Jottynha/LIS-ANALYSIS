@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from lis_analysis.solver.atp_runner import _lis_has_completion_marker
+from lis_analysis.solver.atp_runner import (
+    ATP_DIRECT_SUPPORT_FILES,
+    _cleanup_direct_solver_support,
+    _lis_has_completion_marker,
+    _stage_direct_solver_support,
+)
 
 
 def test_lis_completion_marker_requires_final_timing_block(tmp_path: Path):
@@ -42,3 +47,44 @@ def test_lis_completion_marker_uses_only_tail(tmp_path: Path):
     )
 
     assert not _lis_has_completion_marker(lis_path)
+
+
+def test_direct_solver_support_preserves_existing_files(tmp_path: Path):
+    support_dir = tmp_path / "support"
+    working_dir = tmp_path / "work"
+    support_dir.mkdir()
+    working_dir.mkdir()
+    for filename in ATP_DIRECT_SUPPORT_FILES:
+        (support_dir / filename).write_text(f"source-{filename}", encoding="utf-8")
+
+    existing = working_dir / ATP_DIRECT_SUPPORT_FILES[0]
+    existing.write_text("user-file", encoding="utf-8")
+
+    copied = _stage_direct_solver_support(working_dir, support_dir)
+
+    assert existing.read_text(encoding="utf-8") == "user-file"
+    assert existing not in copied
+    assert len(copied) == len(ATP_DIRECT_SUPPORT_FILES) - 1
+
+    _cleanup_direct_solver_support(copied)
+
+    assert existing.exists()
+    assert all(not path.exists() for path in copied)
+
+
+def test_direct_solver_support_rolls_back_partial_copy(tmp_path: Path):
+    support_dir = tmp_path / "support"
+    working_dir = tmp_path / "work"
+    support_dir.mkdir()
+    working_dir.mkdir()
+    first = ATP_DIRECT_SUPPORT_FILES[0]
+    (support_dir / first).write_text("available", encoding="utf-8")
+
+    try:
+        _stage_direct_solver_support(working_dir, support_dir)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing support file should fail")
+
+    assert not (working_dir / first).exists()

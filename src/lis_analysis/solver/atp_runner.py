@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -8,6 +9,15 @@ from pathlib import Path
 from typing import Callable, Optional
 
 ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
+ATP_DIRECT_EXECUTABLE = Path(r"C:\ATP\atpmingw\tpbig.exe")
+ATP_DIRECT_SUPPORT_DIR = ATP_DIRECT_EXECUTABLE.parent
+ATP_DIRECT_SUPPORT_FILES = (
+    "startup",
+    "graphics",
+    "graphics.aux",
+    "graphics.std",
+    "listsize.big",
+)
 LIS_TAIL_READ_BYTES = 64 * 1024
 
 
@@ -102,6 +112,38 @@ def _lis_has_completion_marker(lis_path: Path) -> bool:
         r"^\s*totals\s*:", tail, flags=re.MULTILINE
     ) is not None
     return has_list_sizes and has_timing_end
+
+
+def _stage_direct_solver_support(
+    working_directory: Path,
+    support_directory: Path = ATP_DIRECT_SUPPORT_DIR,
+) -> list[Path]:
+    """Copia apenas suportes ausentes e retorna os arquivos que devem ser removidos."""
+    copied: list[Path] = []
+    try:
+        for filename in ATP_DIRECT_SUPPORT_FILES:
+            source = support_directory / filename
+            if not source.is_file():
+                raise FileNotFoundError(f"Suporte ATP ausente: {source}")
+
+            destination = working_directory / filename
+            if destination.exists():
+                continue
+
+            shutil.copy2(source, destination)
+            copied.append(destination)
+    except Exception:
+        _cleanup_direct_solver_support(copied)
+        raise
+    return copied
+
+
+def _cleanup_direct_solver_support(copied_files: list[Path]) -> None:
+    for path in reversed(copied_files):
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
 
 def _parse_insert_targets(atp_path: Path) -> list[tuple[int, str]]:
@@ -256,26 +298,55 @@ def run_atp_solver(
                 pass
 
     _notify("===== ATP SIMULATION START =====")
-    _notify(f"ATP executable: {ATP_EXECUTABLE}")
+    direct_support_files: list[Path] = []
+    use_direct_solver = False
+    if ATP_DIRECT_EXECUTABLE.is_file():
+        try:
+            direct_support_files = _stage_direct_solver_support(working_directory)
+            use_direct_solver = True
+        except Exception as exc:
+            _notify(f"Direct ATP unavailable ({exc}). Falling back to runATP.exe.")
+
+    solver_command = [ATP_EXECUTABLE, atp_name]
+    if use_direct_solver:
+        solver_command = [
+            str(ATP_DIRECT_EXECUTABLE),
+            "DISK",
+            atp_name,
+            "s",
+            "-R",
+        ]
+
+    _notify(f"ATP mode: {'direct tpbig' if use_direct_solver else 'runATP wrapper'}")
+    _notify(f"ATP executable: {solver_command[0]}")
     _notify(f"ATP input: {atp_path}")
     _notify(f"Working directory: {working_directory}")
 
-    # Executa runATP e aguarda o término real do processo.
-    process = subprocess.Popen(
-        [ATP_EXECUTABLE, atp_name],
-        cwd=working_directory,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
+    # Executa o solver direto quando disponivel; mantem o wrapper como fallback.
+    try:
+        process = subprocess.Popen(
+            solver_command,
+            cwd=working_directory,
+            stdin=subprocess.DEVNULL if use_direct_solver else subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception:
+        _cleanup_direct_solver_support(direct_support_files)
+        raise
     _notify(f"Process started (pid={process.pid}). Waiting for completion...")
 
     # Alguns wrappers do ATP exibem "Hit any key to close this window" no fim.
-    # Este thread garante fechamento automático sem depender de interação manual.
-    auto_enter_thread = threading.Thread(target=_auto_press_enter, args=(process, status_callback), daemon=True)
-    auto_enter_thread.start()
+    auto_enter_thread = None
+    if not use_direct_solver:
+        auto_enter_thread = threading.Thread(
+            target=_auto_press_enter,
+            args=(process, status_callback),
+            daemon=True,
+        )
+        auto_enter_thread.start()
 
     completion_event = threading.Event()
     last_output_monotonic = time.monotonic()
@@ -289,8 +360,9 @@ def run_atp_solver(
                 clean = line.strip()
                 if clean:
                     last_output_monotonic = time.monotonic()
-                    _notify(f"[runATP] {clean}")
                     lower = clean.lower()
+                    if not use_direct_solver:
+                        _notify(f"[runATP] {clean}")
                     if "total execution time was" in lower or "atp finished at" in lower:
                         if not completion_event.is_set():
                             _notify("Completion marker detected in runATP output.")
@@ -380,7 +452,12 @@ def run_atp_solver(
 
             # Se o wrapper travar no "Hit any key", finaliza automaticamente
             # quando houver marcador de conclusao e LIS estavel.
-            if not process_done and completion_event.is_set() and lis_stable:
+            if (
+                not use_direct_solver
+                and not process_done
+                and completion_event.is_set()
+                and lis_stable
+            ):
                 _notify("Stable LIS + completion marker detected. Closing interactive runATP wrapper...")
                 try:
                     process.terminate()
@@ -396,7 +473,12 @@ def run_atp_solver(
 
             # O bloco final do LIS e o tamanho estavel confirmam a conclusao
             # sem depender dos 8 segundos de ociosidade do wrapper interativo.
-            if not process_done and lis_completion_marker and lis_stable:
+            if (
+                not use_direct_solver
+                and not process_done
+                and lis_completion_marker
+                and lis_stable
+            ):
                 _notify("Complete and stable LIS detected. Closing interactive runATP wrapper...")
                 try:
                     process.terminate()
@@ -413,7 +495,8 @@ def run_atp_solver(
             # Fallback: alguns wrappers não emitem marcador de conclusão em execução parametrizada.
             # Se já existe LIS estável e sem output novo por alguns segundos, fecha o wrapper ocioso.
             if (
-                not process_done
+                not use_direct_solver
+                and not process_done
                 and lis_stable
                 and (now_monotonic - last_output_monotonic) > 8.0
                 and elapsed_total > 12.0
@@ -469,8 +552,10 @@ def run_atp_solver(
         except Exception:
             pass
 
-        auto_enter_thread.join(timeout=1.0)
+        if auto_enter_thread is not None:
+            auto_enter_thread.join(timeout=1.0)
         output_thread.join(timeout=1.0)
+        _cleanup_direct_solver_support(direct_support_files)
 
     elapsed = time.monotonic() - start_monotonic
 

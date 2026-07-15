@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 DEFAULT_ATP_ROOT = Path(r"C:\ATP")
 ATP_EXECUTABLE = str(DEFAULT_ATP_ROOT / "tools" / "runATP.exe")
@@ -21,6 +21,13 @@ ATP_DIRECT_SUPPORT_FILES = (
 )
 LIS_TAIL_READ_BYTES = 64 * 1024
 
+
+class ATPExecutionCancelled(RuntimeError):
+    """Indica que a execucao ATP foi interrompida por solicitacao do usuario."""
+
+    def __init__(self, message: str, lis_path: Path | None = None):
+        super().__init__(message)
+        self.lis_path = lis_path
 
 
 def _windows_registry_atp_roots() -> list[Path]:
@@ -307,10 +314,48 @@ def _auto_press_enter(process: subprocess.Popen, status_callback: Optional[Calla
         time.sleep(1.0)
 
 
+def _terminate_process_tree(process: subprocess.Popen) -> None:
+    """Encerra o solver e, no Windows, eventuais processos filhos do wrapper."""
+    if process.poll() is not None:
+        return
+
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    if process.poll() is not None:
+        return
+
+    try:
+        process.terminate()
+    except Exception:
+        pass
+
+    try:
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=3)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def run_atp_solver(
     atp_file_path: str,
     timeout: int = 600,
     status_callback: Optional[Callable[[str], None]] = None,
+    cancel_event: Any | None = None,
 ) -> str:
     """
     Executa uma simulação ATP usando runATP.exe e aguarda o término real da simulação.
@@ -534,6 +579,20 @@ def run_atp_solver(
 
     try:
         while True:
+            if cancel_event is not None and cancel_event.is_set():
+                _notify("Cancellation requested. Stopping ATP process...")
+                _update_lis_state(0.0)
+                cancelled_lis_path = (
+                    lis_path
+                    if lis_path is not None and _is_recent_lis(lis_path)
+                    else None
+                )
+                _terminate_process_tree(process)
+                raise ATPExecutionCancelled(
+                    "Simulacao ATP cancelada pelo usuario",
+                    lis_path=cancelled_lis_path,
+                )
+
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
             required_stable_window_sec = (

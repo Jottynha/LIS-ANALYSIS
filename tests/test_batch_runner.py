@@ -303,6 +303,58 @@ class BatchRunnerExecutionTest(unittest.TestCase):
             self.assertEqual(summary.processed_count, 1)
             self.assertEqual(summary.cancelled_count, 2)
             self.assertAlmostEqual(events[-1]["progress"], 1 / 3)
+            self.assertTrue((summary.output_dir / "EXECUCAO_CANCELADA.txt").exists())
+            self.assertFalse(
+                (summary.results[0].run_dir / "EXECUCAO_CANCELADA.txt").exists()
+            )
+            self.assertTrue(summary.results[1].run_dir.name.startswith("CANCELADA_"))
+            self.assertTrue(summary.results[2].run_dir.name.startswith("CANCELADA_"))
+            self.assertTrue(
+                (summary.results[1].run_dir / "EXECUCAO_CANCELADA.txt").exists()
+            )
+            self.assertTrue(
+                (summary.results[2].run_dir / "EXECUCAO_CANCELADA.txt").exists()
+            )
+
+    def test_cancel_reaches_solver_already_in_progress(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            self._create_base_atp(base_atp)
+            branch = parse_atp_file(base_atp)[0]
+            cancel_event = threading.Event()
+            solver_started = threading.Event()
+
+            def cancellable_solver(atp_file_path: str, **kwargs) -> str:
+                solver_started.set()
+                received_cancel_event = kwargs.get("cancel_event")
+                while not received_cancel_event.is_set():
+                    time.sleep(0.01)
+                raise RuntimeError("cancelled active solver")
+
+            def request_cancel() -> None:
+                solver_started.wait(timeout=1)
+                cancel_event.set()
+
+            threading.Thread(target=request_cancel, daemon=True).start()
+            started = time.monotonic()
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id={"line_index": branch["line_index"], "parameter": "resistance"},
+                start=5,
+                stop=15,
+                step=5,
+                output_dir=root / "out",
+                solver_runner=cancellable_solver,
+                cancel_event=cancel_event,
+            )
+
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertTrue(summary.cancelled)
+            self.assertEqual(
+                [result.status for result in summary.results],
+                ["cancelled", "cancelled", "cancelled"],
+            )
 
     def test_parallel_solver_serializes_lis_postprocessing(self):
         with tempfile.TemporaryDirectory() as tmpdir:

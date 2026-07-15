@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lis_analysis.atp_parser import parse_atp_file, update_parameter
 from lis_analysis.atp_writer import write_atp_file
-from lis_analysis.solver.atp_runner import run_atp_solver
+from lis_analysis.solver.atp_runner import ATPExecutionCancelled, run_atp_solver
 
 
 class _FakeStdin:
@@ -49,7 +49,10 @@ def _make_fake_popen_class(
     lis_emit_delay_sec: float = 0.2,
 ):
     class FakePopen:
+        last_instance = None
+
         def __init__(self, command, cwd=None, **_kwargs):
+            type(self).last_instance = self
             self.command = command
             self.cwd = Path(cwd)
             self.pid = 99999
@@ -123,6 +126,36 @@ class ATPPipelineParamRunTest(unittest.TestCase):
             original_lines = f.read().splitlines(keepends=True)
 
         write_atp_file(elements, original_lines, output_atp)
+
+    def test_param_run_can_cancel_active_solver_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            atp_path = tmp / "caso.atp"
+            self._create_base_atp(atp_path)
+            cancel_event = threading.Event()
+            fake_popen = _make_fake_popen_class(
+                lis_name="parcial.lis",
+                lis_content="LIS PARCIAL\n",
+                finish_after_sec=30.0,
+                lis_emit_delay_sec=0.02,
+            )
+
+            def request_cancel() -> None:
+                partial_lis = tmp / "parcial.lis"
+                deadline = time.monotonic() + 2.0
+                while not partial_lis.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                cancel_event.set()
+
+            threading.Thread(target=request_cancel, daemon=True).start()
+            with patch("lis_analysis.solver.atp_runner.subprocess.Popen", new=fake_popen):
+                with self.assertRaises(ATPExecutionCancelled) as ctx:
+                    run_atp_solver(str(atp_path), timeout=30, cancel_event=cancel_event)
+
+            self.assertIsNotNone(fake_popen.last_instance)
+            self.assertTrue(fake_popen.last_instance._terminated)
+            self.assertIsNotNone(ctx.exception.lis_path)
+            self.assertEqual(ctx.exception.lis_path.name, "parcial.lis")
 
     def test_param_run_detects_recent_lis_with_alternative_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:

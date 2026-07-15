@@ -268,6 +268,7 @@ def run_parameter_sweep(
             lis_parser=lis_parser,
             event_callback=event_callback,
             lis_parser_lock=lis_parser_lock,
+            cancel_event=cancel_event,
         )
 
     # O solver pode rodar em paralelo, mas o pos-processamento da GUI usa
@@ -311,6 +312,30 @@ def run_parameter_sweep(
     processed_progress = summary.processed_count / max(1, total_runs)
 
     if summary.cancelled:
+        _write_cancellation_marker(
+            sweep_dir,
+            (
+                "EXECUCAO EM LOTE CANCELADA\n"
+                f"Cancelada em: {summary.finished_at.isoformat(timespec='seconds')}\n"
+                f"Concluidas: {summary.success_count}\n"
+                f"Canceladas: {summary.cancelled_count}\n"
+                "Arquivos de rodadas canceladas podem estar incompletos e nao devem ser usados como resultado final.\n"
+            ),
+        )
+        for cancelled_result in summary.results:
+            if cancelled_result.status != "cancelled":
+                continue
+            _prefix_cancelled_run_directory(cancelled_result)
+            _write_cancellation_marker(
+                cancelled_result.run_dir,
+                (
+                    "RODADA ATP CANCELADA\n"
+                    f"Rodada: {cancelled_result.run_index}/{total_runs}\n"
+                    f"Valor: {cancelled_result.value:g}\n"
+                    "Os arquivos desta pasta podem estar incompletos.\n"
+                ),
+            )
+
         _emit_event(
             event_callback,
             type="sweep_cancelled",
@@ -596,8 +621,12 @@ def _execute_sweep_run(
                 str(execution_atp_path),
                 timeout=solver_timeout,
                 status_callback=_solver_status_callback,
+                cancel_event=cancel_event,
             )
         )
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("cancelled by user")
 
         _emit_event(
             event_callback,
@@ -647,11 +676,13 @@ def _execute_sweep_run(
         result.atp_path = relocated.get("atp_path")
         result.lis_path = relocated.get("lis_path")
 
+        was_cancelled = cancel_event is not None and cancel_event.is_set()
         _emit_event(
             event_callback,
-            type="run_failed",
+            type="run_cancelled" if was_cancelled else "run_failed",
             message=(
-                f"Run {result.run_index}/{total_runs} falhou em "
+                f"Run {result.run_index}/{total_runs} "
+                f"{'cancelado' if was_cancelled else 'falhou'} em "
                 f"{result.elapsed_seconds:.2f}s: {result.error}"
             ),
             run_index=result.run_index,
@@ -673,8 +704,13 @@ def _finalize_sweep_run(
     lis_parser: SweepLisParser | None,
     event_callback: SweepEventCallback | None,
     lis_parser_lock: threading.Lock | None,
+    cancel_event: Any | None,
 ) -> None:
     if result.status != "solver_completed":
+        return
+    if cancel_event is not None and cancel_event.is_set():
+        result.status = "cancelled"
+        result.error = "cancelled before post-processing"
         return
 
     try:
@@ -706,6 +742,11 @@ def _finalize_sweep_run(
                 with lis_parser_lock:
                     result.analysis = _parse_lis()
             result.elapsed_seconds += time.monotonic() - parse_started
+
+        if cancel_event is not None and cancel_event.is_set():
+            result.status = "cancelled"
+            result.error = "cancelled during post-processing"
+            return
 
         result.status = "success"
         _emit_event(
@@ -739,6 +780,38 @@ def _finalize_sweep_run(
             run_dir=result.run_dir,
             error=result.error,
         )
+
+
+def _prefix_cancelled_run_directory(result: SweepRunResult) -> Path:
+    original = result.run_dir
+    if original.name.startswith("CANCELADA_"):
+        return original
+
+    target = original.with_name(f"CANCELADA_{original.name}")
+    index = 2
+    while target.exists():
+        target = original.with_name(f"CANCELADA_{original.name}_{index}")
+        index += 1
+
+    if original.exists():
+        original.rename(target)
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+
+    for attribute in ("atp_path", "lis_path"):
+        artifact = getattr(result, attribute)
+        if artifact is not None and artifact.parent == original:
+            setattr(result, attribute, target / artifact.name)
+
+    result.run_dir = target
+    return target
+
+
+def _write_cancellation_marker(directory: Path, content: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    marker = directory / "EXECUCAO_CANCELADA.txt"
+    marker.write_text(content, encoding="utf-8")
+    return marker
 
 
 def _emit_event(callback: SweepEventCallback | None, **payload: Any) -> None:

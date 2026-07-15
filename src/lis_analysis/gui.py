@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 
 from .batch_runner import SweepParameterRef, generate_sweep_values, run_parameter_sweep
-from .solver.atp_runner import run_atp_solver, get_missing_insert_dependencies
+from .solver.atp_runner import ATPExecutionCancelled, run_atp_solver, get_missing_insert_dependencies
 from .atp_parser import parse_atp_file_cached, get_editable_parameters, update_parameter
 from .atp_writer import write_atp_file
 from .failure_risk import FailureRiskConfig, FailureRiskResult, calculate_failure_risk
@@ -877,7 +877,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.atp_run_button = ctk.CTkButton(
             buttons_frame,
-            text="Run Simulation",
+            text="Executar Simulação",
             command=self._run_atp_simulation,
             width=200,
             height=40,
@@ -889,7 +889,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.atp_sweep_run_button = ctk.CTkButton(
             buttons_frame,
-            text="Run Parameter Sweep",
+            text="Executar em Lote",
             command=self._run_atp_parameter_sweep,
             width=220,
             height=40,
@@ -2077,16 +2077,93 @@ class ModernLisAnalysisApp(ctk.CTk):
             "risk_record": risk_record,
         }
 
+    def _preserve_cancelled_atp_artifacts(
+        self,
+        *,
+        output_root: Path,
+        source_atp: Path,
+        execution_atp: Path,
+        simulation_dir: Path | None,
+        partial_lis: Path | None,
+    ) -> Path:
+        """Preserva artefatos e identifica claramente uma execucao interrompida."""
+        import shutil
+
+        output_root.mkdir(parents=True, exist_ok=True)
+
+        def unique_directory(candidate: Path) -> Path:
+            if not candidate.exists():
+                return candidate
+            index = 2
+            while True:
+                alternative = candidate.with_name(f"{candidate.name}_{index}")
+                if not alternative.exists():
+                    return alternative
+                index += 1
+
+        cancelled_dir: Path
+        if simulation_dir is not None and simulation_dir.exists():
+            desired = unique_directory(
+                simulation_dir.with_name(f"CANCELADA_{simulation_dir.name}")
+            )
+            try:
+                simulation_dir.rename(desired)
+                cancelled_dir = desired
+            except Exception:
+                cancelled_dir = simulation_dir
+        else:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            cancelled_dir = unique_directory(output_root / f"CANCELADA_{timestamp}")
+            cancelled_dir.mkdir(parents=True, exist_ok=True)
+
+        if partial_lis is not None and partial_lis.exists():
+            try:
+                partial_inside_output = partial_lis.resolve().parent == cancelled_dir.resolve()
+            except Exception:
+                partial_inside_output = False
+            if not partial_inside_output:
+                target = cancelled_dir / f"INCOMPLETO_{partial_lis.name}"
+                try:
+                    shutil.move(str(partial_lis), str(target))
+                except Exception:
+                    try:
+                        shutil.copy2(str(partial_lis), str(target))
+                    except Exception:
+                        pass
+
+        if execution_atp != source_atp and execution_atp.exists():
+            target = cancelled_dir / execution_atp.name
+            if not target.exists():
+                try:
+                    shutil.copy2(str(execution_atp), str(target))
+                except Exception:
+                    pass
+
+        marker = cancelled_dir / "EXECUCAO_CANCELADA.txt"
+        marker.write_text(
+            (
+                "SIMULACAO ATP CANCELADA PELO USUARIO\n"
+                f"Arquivo original: {source_atp}\n"
+                f"Cancelada em: {datetime.now().isoformat(timespec='seconds')}\n"
+                "Os arquivos desta pasta foram preservados para inspecao.\n"
+                "Arquivos marcados como INCOMPLETO nao devem ser usados como resultado final.\n"
+            ),
+            encoding="utf-8",
+        )
+        return cancelled_dir
+
     def _cancel_atp_execution(self):
-        if not self._atp_running or self._atp_active_mode != "batch":
-            self._show_info("Execucao ATP", "Nao existe sweep em lote em andamento para cancelar.")
+        if not self._atp_running:
+            self._show_info("Execucao ATP", "Nao existe simulacao ATP em andamento para cancelar.")
             return
 
         self._atp_cancel_event.set()
+        if self.atp_cancel_button is not None:
+            self.atp_cancel_button.configure(state="disabled", text="Cancelando...")
         self.atp_batch_status_var.set("Cancelamento solicitado")
         self._atp_runtime_status_text = "Cancelamento solicitado"
         self.atp_run_status_var.set("Status: cancelamento solicitado")
-        self.log("[ATP-SWEEP] Cancelamento solicitado pelo usuario")
+        self.log("[ATP] Cancelamento solicitado pelo usuario")
 
     def _on_atp_sweep_event(self, event: dict):
         message = str(event.get("message", "")).strip()
@@ -2098,7 +2175,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         total_runs = int(event.get("total_runs", 0) or 0)
         run_index = int(event.get("run_index", 0) or 0)
         event_type = str(event.get("type", ""))
-        if self._atp_sweep_parallel_active and event_type in {"run_succeeded", "run_failed"}:
+        if self._atp_sweep_parallel_active and event_type in {
+            "run_succeeded",
+            "run_failed",
+            "run_cancelled",
+        }:
             self._atp_sweep_completed_runs.add(run_index)
 
         if total_runs:
@@ -2820,11 +2901,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
             parametrized_exec_atp = None
+            execution_atp_path = Path(atp_file)
+            sim_outdir = None
             try:
                 _ensure_pipeline_imports()
                 import shutil
 
-                execution_atp_path = Path(atp_file)
                 if atp_overrides:
                     report_progress("Applying ATP parameter overrides...")
                     elements = parse_atp_file_cached(execution_atp_path)
@@ -2862,8 +2944,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                         str(execution_atp_path),
                         timeout=self._atp_timeout_sec,
                         status_callback=report_progress,
+                        cancel_event=self._atp_cancel_event,
                     )
                 )
+
+                if self._atp_cancel_event.is_set():
+                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
 
                 report_progress("Preparing output folder...")
                 base_outdir = Path(outdir_str)
@@ -2905,6 +2991,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                     }
                     metadata_path = sim_outdir / "parametros_aplicados.json"
                     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+                if self._atp_cancel_event.is_set():
+                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
 
                 report_progress("Parsing LIS and generating tables...")
                 parsed = parse_lis_once(lis_target, verbose=False)
@@ -2954,6 +3043,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                     else:
                         report_progress("Skipping individual chart (only comparative option enabled).")
 
+                if self._atp_cancel_event.is_set():
+                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+
                 report_progress("Processing time series...")
                 try:
                     time_series_df = parsed.time_series_df
@@ -2971,11 +3063,17 @@ class ModernLisAnalysisApp(ctk.CTk):
                     if not hide_errors:
                         report_progress(f"Warning: falha em series temporais: {e}")
 
+                if self._atp_cancel_event.is_set():
+                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+
                 risk_report_path = self._write_failure_risk_report(
                     sim_outdir,
                     "Simulacao ATP",
                     risk_records,
                 )
+                if self._atp_cancel_event.is_set():
+                    raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
+
                 payload = {
                     "lis_path": str(lis_target),
                     "outdir": str(sim_outdir),
@@ -2985,6 +3083,18 @@ class ModernLisAnalysisApp(ctk.CTk):
                     "risk_report_path": str(risk_report_path) if risk_report_path else None,
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
+            except ATPExecutionCancelled as exc:
+                cancelled_outdir = self._preserve_cancelled_atp_artifacts(
+                    output_root=Path(outdir_str),
+                    source_atp=Path(atp_file),
+                    execution_atp=execution_atp_path,
+                    simulation_dir=sim_outdir,
+                    partial_lis=exc.lis_path,
+                )
+                self.after(
+                    0,
+                    lambda folder=str(cancelled_outdir): self._on_atp_simulation_cancelled(folder),
+                )
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
@@ -3012,6 +3122,18 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._set_atp_progress(0.92)
         elif "lis ready" in text:
             self._set_atp_progress(0.98)
+
+    def _on_atp_simulation_cancelled(self, cancelled_outdir: str | None = None):
+        """Restaura a interface apos o usuario interromper a simulacao."""
+        elapsed = self._set_atp_feedback_finished(success=False, final_progress=self._atp_progress_value)
+        self.status_var.set("Simulacao cancelada")
+        self.atp_batch_status_var.set("Simulacao cancelada")
+        self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
+        self.log(f"Simulacao ATP cancelada apos {elapsed:.1f}s")
+        result_text = f"Simulacao ATP cancelada pelo usuario apos {elapsed:.1f}s."
+        if cancelled_outdir:
+            result_text += f"\nArquivos preservados em: {cancelled_outdir}"
+        self._update_simulation_results(result_text)
 
     def _on_atp_simulation_finished(self, success: bool, payload):
         """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""
@@ -3100,7 +3222,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         if self.atp_sweep_run_button is not None:
             self.atp_sweep_run_button.configure(state="disabled", text="Executando...")
         if self.atp_cancel_button is not None:
-            self.atp_cancel_button.configure(state="normal" if mode == "batch" else "disabled")
+            self.atp_cancel_button.configure(state="normal", text="Cancelar")
         self.atp_batch_progress_var.set(f"0 / {max(1, int(total_runs))}")
         self.atp_batch_elapsed_var.set("0s")
         self.atp_batch_status_var.set("Executando")
@@ -3120,11 +3242,11 @@ class ModernLisAnalysisApp(ctk.CTk):
         if target_progress is None:
             target_progress = 1.0 if success else 0.0
         self._set_atp_progress(target_progress)
-        self.atp_run_button.configure(state="normal", text="Run Simulation")
+        self.atp_run_button.configure(state="normal", text="Executar Simulação")
         if self.atp_sweep_run_button is not None:
-            self.atp_sweep_run_button.configure(state="normal", text="Run Parameter Sweep")
+            self.atp_sweep_run_button.configure(state="normal", text="Executar em Lote")
         if self.atp_cancel_button is not None:
-            self.atp_cancel_button.configure(state="disabled")
+            self.atp_cancel_button.configure(state="disabled", text="Cancelar")
         self.atp_batch_elapsed_var.set(f"{elapsed:.1f}s")
 
         if success:

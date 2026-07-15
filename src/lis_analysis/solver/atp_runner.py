@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 ATP_EXECUTABLE = r"C:\ATP\tools\runATP.exe"
+LIS_TAIL_READ_BYTES = 64 * 1024
 
 
 def _adaptive_poll_interval(idle_seconds: float) -> float:
@@ -83,6 +84,24 @@ def _detect_lis_fatal_error(lis_path: Path) -> Optional[str]:
         )
 
     return None
+
+
+def _lis_has_completion_marker(lis_path: Path) -> bool:
+    """Confirma que o ATP escreveu o bloco final de temporizacao do LIS."""
+    try:
+        with lis_path.open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(max(0, size - LIS_TAIL_READ_BYTES))
+            tail = stream.read().decode(errors="replace").lower()
+    except Exception:
+        return False
+
+    has_list_sizes = "actual list sizes for the preceding solution follow" in tail
+    has_timing_end = "seconds after deltat-loop" in tail and re.search(
+        r"^\s*totals\s*:", tail, flags=re.MULTILINE
+    ) is not None
+    return has_list_sizes and has_timing_end
 
 
 def _parse_insert_targets(atp_path: Path) -> list[tuple[int, str]]:
@@ -288,6 +307,7 @@ def run_atp_solver(
     last_change_monotonic = None
     stable_window_running_sec = 3.0
     stable_window_after_process_sec = 1.0
+    stable_window_with_completion_marker_sec = 0.75
     process_done = False
     process_done_at_monotonic = None
 
@@ -332,6 +352,22 @@ def run_atp_solver(
                 stable_window_after_process_sec if process_done else stable_window_running_sec
             )
             lis_stable = _update_lis_state(required_stable_window_sec)
+            marker_check_ready = bool(
+                lis_path is not None
+                and last_change_monotonic is not None
+                and (now_monotonic - last_change_monotonic) >= 0.25
+            )
+            lis_completion_marker = bool(
+                marker_check_ready and _lis_has_completion_marker(lis_path)
+            )
+            if (
+                not lis_stable
+                and lis_completion_marker
+                and last_change_monotonic is not None
+                and (now_monotonic - last_change_monotonic)
+                >= stable_window_with_completion_marker_sec
+            ):
+                lis_stable = True
 
             if not process_done:
                 polled = process.poll()
@@ -346,6 +382,22 @@ def run_atp_solver(
             # quando houver marcador de conclusao e LIS estavel.
             if not process_done and completion_event.is_set() and lis_stable:
                 _notify("Stable LIS + completion marker detected. Closing interactive runATP wrapper...")
+                try:
+                    process.terminate()
+                    return_code = process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return_code = process.wait()
+
+                process_done = True
+                process_done_at_monotonic = now_monotonic
+                _notify(f"Process finished with return code {return_code}")
+                _notify("Waiting for LIS generation/stabilization...")
+
+            # O bloco final do LIS e o tamanho estavel confirmam a conclusao
+            # sem depender dos 8 segundos de ociosidade do wrapper interativo.
+            if not process_done and lis_completion_marker and lis_stable:
+                _notify("Complete and stable LIS detected. Closing interactive runATP wrapper...")
                 try:
                     process.terminate()
                     return_code = process.wait(timeout=5)

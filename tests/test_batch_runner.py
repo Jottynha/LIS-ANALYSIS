@@ -303,18 +303,14 @@ class BatchRunnerExecutionTest(unittest.TestCase):
             self.assertEqual(summary.processed_count, 1)
             self.assertEqual(summary.cancelled_count, 2)
             self.assertAlmostEqual(events[-1]["progress"], 1 / 3)
-            self.assertTrue((summary.output_dir / "EXECUCAO_CANCELADA.txt").exists())
-            self.assertFalse(
-                (summary.results[0].run_dir / "EXECUCAO_CANCELADA.txt").exists()
-            )
-            self.assertTrue(summary.results[1].run_dir.name.startswith("CANCELADA_"))
-            self.assertTrue(summary.results[2].run_dir.name.startswith("CANCELADA_"))
-            self.assertTrue(
-                (summary.results[1].run_dir / "EXECUCAO_CANCELADA.txt").exists()
-            )
-            self.assertTrue(
-                (summary.results[2].run_dir / "EXECUCAO_CANCELADA.txt").exists()
-            )
+            self.assertTrue(summary.output_dir.exists())
+            self.assertTrue(summary.results[0].run_dir.exists())
+            self.assertFalse(summary.results[1].run_dir.exists())
+            self.assertFalse(summary.results[2].run_dir.exists())
+            self.assertIsNone(summary.results[1].atp_path)
+            self.assertIsNone(summary.results[1].lis_path)
+            self.assertIsNone(summary.results[2].atp_path)
+            self.assertIsNone(summary.results[2].lis_path)
 
     def test_cancel_reaches_solver_already_in_progress(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -355,6 +351,8 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 [result.status for result in summary.results],
                 ["cancelled", "cancelled", "cancelled"],
             )
+            self.assertFalse(summary.output_dir.exists())
+            self.assertTrue(all(not result.run_dir.exists() for result in summary.results))
 
     def test_parallel_solver_serializes_lis_postprocessing(self):
         with tempfile.TemporaryDirectory() as tmpdir:

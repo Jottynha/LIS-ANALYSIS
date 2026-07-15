@@ -312,29 +312,17 @@ def run_parameter_sweep(
     processed_progress = summary.processed_count / max(1, total_runs)
 
     if summary.cancelled:
-        _write_cancellation_marker(
-            sweep_dir,
-            (
-                "EXECUCAO EM LOTE CANCELADA\n"
-                f"Cancelada em: {summary.finished_at.isoformat(timespec='seconds')}\n"
-                f"Concluidas: {summary.success_count}\n"
-                f"Canceladas: {summary.cancelled_count}\n"
-                "Arquivos de rodadas canceladas podem estar incompletos e nao devem ser usados como resultado final.\n"
-            ),
-        )
         for cancelled_result in summary.results:
             if cancelled_result.status != "cancelled":
                 continue
-            _prefix_cancelled_run_directory(cancelled_result)
-            _write_cancellation_marker(
-                cancelled_result.run_dir,
-                (
-                    "RODADA ATP CANCELADA\n"
-                    f"Rodada: {cancelled_result.run_index}/{total_runs}\n"
-                    f"Valor: {cancelled_result.value:g}\n"
-                    "Os arquivos desta pasta podem estar incompletos.\n"
-                ),
-            )
+            shutil.rmtree(cancelled_result.run_dir, ignore_errors=True)
+            cancelled_result.atp_path = None
+            cancelled_result.lis_path = None
+
+        try:
+            sweep_dir.rmdir()
+        except OSError:
+            pass
 
         _emit_event(
             event_callback,
@@ -780,38 +768,6 @@ def _finalize_sweep_run(
             run_dir=result.run_dir,
             error=result.error,
         )
-
-
-def _prefix_cancelled_run_directory(result: SweepRunResult) -> Path:
-    original = result.run_dir
-    if original.name.startswith("CANCELADA_"):
-        return original
-
-    target = original.with_name(f"CANCELADA_{original.name}")
-    index = 2
-    while target.exists():
-        target = original.with_name(f"CANCELADA_{original.name}_{index}")
-        index += 1
-
-    if original.exists():
-        original.rename(target)
-    else:
-        target.mkdir(parents=True, exist_ok=True)
-
-    for attribute in ("atp_path", "lis_path"):
-        artifact = getattr(result, attribute)
-        if artifact is not None and artifact.parent == original:
-            setattr(result, attribute, target / artifact.name)
-
-    result.run_dir = target
-    return target
-
-
-def _write_cancellation_marker(directory: Path, content: str) -> Path:
-    directory.mkdir(parents=True, exist_ok=True)
-    marker = directory / "EXECUCAO_CANCELADA.txt"
-    marker.write_text(content, encoding="utf-8")
-    return marker
 
 
 def _emit_event(callback: SweepEventCallback | None, **payload: Any) -> None:

@@ -2077,80 +2077,30 @@ class ModernLisAnalysisApp(ctk.CTk):
             "risk_record": risk_record,
         }
 
-    def _preserve_cancelled_atp_artifacts(
+    def _cleanup_cancelled_atp_artifacts(
         self,
         *,
-        output_root: Path,
         source_atp: Path,
         execution_atp: Path,
+        generated_lis: Path | None,
         simulation_dir: Path | None,
-        partial_lis: Path | None,
-    ) -> Path:
-        """Preserva artefatos e identifica claramente uma execucao interrompida."""
+    ) -> None:
+        """Remove somente artefatos incompletos da simulacao cancelada."""
         import shutil
 
-        output_root.mkdir(parents=True, exist_ok=True)
-
-        def unique_directory(candidate: Path) -> Path:
-            if not candidate.exists():
-                return candidate
-            index = 2
-            while True:
-                alternative = candidate.with_name(f"{candidate.name}_{index}")
-                if not alternative.exists():
-                    return alternative
-                index += 1
-
-        cancelled_dir: Path
         if simulation_dir is not None and simulation_dir.exists():
-            desired = unique_directory(
-                simulation_dir.with_name(f"CANCELADA_{simulation_dir.name}")
-            )
+            shutil.rmtree(simulation_dir, ignore_errors=True)
+        if generated_lis is not None and generated_lis.exists():
             try:
-                simulation_dir.rename(desired)
-                cancelled_dir = desired
-            except Exception:
-                cancelled_dir = simulation_dir
-        else:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            cancelled_dir = unique_directory(output_root / f"CANCELADA_{timestamp}")
-            cancelled_dir.mkdir(parents=True, exist_ok=True)
-
-        if partial_lis is not None and partial_lis.exists():
-            try:
-                partial_inside_output = partial_lis.resolve().parent == cancelled_dir.resolve()
-            except Exception:
-                partial_inside_output = False
-            if not partial_inside_output:
-                target = cancelled_dir / f"INCOMPLETO_{partial_lis.name}"
-                try:
-                    shutil.move(str(partial_lis), str(target))
-                except Exception:
-                    try:
-                        shutil.copy2(str(partial_lis), str(target))
-                    except Exception:
-                        pass
+                generated_lis.unlink()
+            except OSError:
+                pass
 
         if execution_atp != source_atp and execution_atp.exists():
-            target = cancelled_dir / execution_atp.name
-            if not target.exists():
-                try:
-                    shutil.copy2(str(execution_atp), str(target))
-                except Exception:
-                    pass
-
-        marker = cancelled_dir / "EXECUCAO_CANCELADA.txt"
-        marker.write_text(
-            (
-                "SIMULACAO ATP CANCELADA PELO USUARIO\n"
-                f"Arquivo original: {source_atp}\n"
-                f"Cancelada em: {datetime.now().isoformat(timespec='seconds')}\n"
-                "Os arquivos desta pasta foram preservados para inspecao.\n"
-                "Arquivos marcados como INCOMPLETO nao devem ser usados como resultado final.\n"
-            ),
-            encoding="utf-8",
-        )
-        return cancelled_dir
+            try:
+                execution_atp.unlink()
+            except OSError:
+                pass
 
     def _cancel_atp_execution(self):
         if not self._atp_running:
@@ -2201,10 +2151,15 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self._set_atp_progress(max(self._atp_progress_value, float(progress)))
 
     def _format_atp_sweep_summary(self, summary) -> str:
+        output_label = (
+            str(summary.output_dir)
+            if summary.output_dir.exists()
+            else "Nenhum resultado preservado"
+        )
         lines = [
             f"Sweep finalizado em {summary.elapsed_seconds:.1f}s",
             f"Parametro: {summary.parameter.display_label}",
-            f"Pasta de saida: {summary.output_dir}",
+            f"Pasta de saida: {output_label}",
             (
                 f"Total: {summary.total_runs} | Sucessos: {summary.success_count} | "
                 f"Falhas: {summary.failure_count} | Canceladas: {summary.cancelled_count} | "
@@ -2275,7 +2230,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             f"{summary.failure_count} falha(s), {summary.cancelled_count} cancelada(s)"
         )
 
-        if self.save_logs_var.get():
+        if self.save_logs_var.get() and summary.output_dir.exists():
             try:
                 log_file = summary.output_dir / f"log_sweep_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
                 log_content = self.log_textbox.get("1.0", "end")
@@ -2284,14 +2239,19 @@ class ModernLisAnalysisApp(ctk.CTk):
             except Exception as exc:
                 self.log(f"[ATP-SWEEP] Aviso: nao foi possivel salvar log do sweep: {exc}")
 
-        if self.open_output_var.get():
+        if self.open_output_var.get() and summary.output_dir.exists():
             _open_in_file_manager(summary.output_dir)
 
         if summary.cancelled:
+            preserved_output = (
+                str(summary.output_dir)
+                if summary.output_dir.exists()
+                else "Nenhum resultado preservado"
+            )
             self._show_warning(
                 "Sweep cancelado",
-                f"O sweep foi interrompido apos {len(summary.results)} execucao(oes).",
-                details=[("Resultados", str(summary.output_dir))],
+                f"O sweep foi interrompido apos {summary.processed_count} execucao(oes) concluida(s).",
+                details=[("Resultados", preserved_output)],
             )
         elif summary.failure_count > 0:
             self._show_warning(
@@ -2901,6 +2861,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
 
             parametrized_exec_atp = None
+            generated_lis_path = None
             execution_atp_path = Path(atp_file)
             sim_outdir = None
             try:
@@ -3083,18 +3044,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                     "risk_report_path": str(risk_report_path) if risk_report_path else None,
                 }
                 self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
-            except ATPExecutionCancelled as exc:
-                cancelled_outdir = self._preserve_cancelled_atp_artifacts(
-                    output_root=Path(outdir_str),
+            except ATPExecutionCancelled:
+                self._cleanup_cancelled_atp_artifacts(
                     source_atp=Path(atp_file),
                     execution_atp=execution_atp_path,
+                    generated_lis=generated_lis_path,
                     simulation_dir=sim_outdir,
-                    partial_lis=exc.lis_path,
                 )
-                self.after(
-                    0,
-                    lambda folder=str(cancelled_outdir): self._on_atp_simulation_cancelled(folder),
-                )
+                self.after(0, self._on_atp_simulation_cancelled)
             except Exception as e:
                 error_msg = str(e)
                 self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
@@ -3123,17 +3080,16 @@ class ModernLisAnalysisApp(ctk.CTk):
         elif "lis ready" in text:
             self._set_atp_progress(0.98)
 
-    def _on_atp_simulation_cancelled(self, cancelled_outdir: str | None = None):
+    def _on_atp_simulation_cancelled(self):
         """Restaura a interface apos o usuario interromper a simulacao."""
         elapsed = self._set_atp_feedback_finished(success=False, final_progress=self._atp_progress_value)
         self.status_var.set("Simulacao cancelada")
         self.atp_batch_status_var.set("Simulacao cancelada")
         self.atp_run_status_var.set(f"Status: cancelado ({elapsed:.1f}s)")
         self.log(f"Simulacao ATP cancelada apos {elapsed:.1f}s")
-        result_text = f"Simulacao ATP cancelada pelo usuario apos {elapsed:.1f}s."
-        if cancelled_outdir:
-            result_text += f"\nArquivos preservados em: {cancelled_outdir}"
-        self._update_simulation_results(result_text)
+        self._update_simulation_results(
+            f"Simulacao ATP cancelada pelo usuario apos {elapsed:.1f}s."
+        )
 
     def _on_atp_simulation_finished(self, success: bool, payload):
         """Atualiza a GUI quando a simulacao ATP termina (thread principal)."""

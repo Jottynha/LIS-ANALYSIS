@@ -134,14 +134,14 @@ class ATPPipelineParamRunTest(unittest.TestCase):
             self._create_base_atp(atp_path)
             cancel_event = threading.Event()
             fake_popen = _make_fake_popen_class(
-                lis_name="parcial.lis",
+                lis_name="caso.lis",
                 lis_content="LIS PARCIAL\n",
                 finish_after_sec=30.0,
                 lis_emit_delay_sec=0.02,
             )
 
             def request_cancel() -> None:
-                partial_lis = tmp / "parcial.lis"
+                partial_lis = tmp / "caso.lis"
                 deadline = time.monotonic() + 2.0
                 while not partial_lis.exists() and time.monotonic() < deadline:
                     time.sleep(0.01)
@@ -154,8 +154,8 @@ class ATPPipelineParamRunTest(unittest.TestCase):
 
             self.assertIsNotNone(fake_popen.last_instance)
             self.assertTrue(fake_popen.last_instance._terminated)
-            self.assertIsNotNone(ctx.exception.lis_path)
-            self.assertEqual(ctx.exception.lis_path.name, "parcial.lis")
+            self.assertIsNone(ctx.exception.lis_path)
+            self.assertFalse((tmp / "caso.lis").exists())
 
     def test_param_run_detects_recent_lis_with_alternative_name(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -254,6 +254,59 @@ def _cleanup_direct_solver_support(copied_files: list[Path]) -> None:
             pass
 
 
+def _snapshot_matching_files(
+    directory: Path,
+    predicate: Callable[[Path], bool],
+) -> dict[str, tuple[int, int]]:
+    snapshot: dict[str, tuple[int, int]] = {}
+    for candidate in directory.iterdir():
+        if not candidate.is_file() or not predicate(candidate):
+            continue
+        try:
+            stat = candidate.stat()
+            snapshot[str(candidate.resolve()).lower()] = (
+                int(stat.st_mtime_ns),
+                int(stat.st_size),
+            )
+        except OSError:
+            continue
+    return snapshot
+
+
+def _is_atp_temporary_file(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        (name.startswith("dum") and name.endswith(".bin"))
+        or path.suffix.lower() in {".tmp", ".temp"}
+    )
+
+
+def _is_cancelled_atp_result(path: Path) -> bool:
+    return path.suffix.lower() in {".lis", ".pl4", ".dbg"}
+
+
+def _remove_files_changed_since_snapshot(
+    directory: Path,
+    snapshot: dict[str, tuple[int, int]],
+    predicate: Callable[[Path], bool],
+) -> list[Path]:
+    removed: list[Path] = []
+    for candidate in directory.iterdir():
+        if not candidate.is_file() or not predicate(candidate):
+            continue
+        try:
+            stat = candidate.stat()
+            current = (int(stat.st_mtime_ns), int(stat.st_size))
+            previous = snapshot.get(str(candidate.resolve()).lower())
+            if previous == current:
+                continue
+            candidate.unlink()
+            removed.append(candidate)
+        except OSError:
+            continue
+    return removed
+
+
 def _parse_insert_targets(atp_path: Path) -> list[tuple[int, str]]:
     """Extrai alvos de diretivas $INSERT no formato (linha, caminho)."""
     targets: list[tuple[int, str]] = []
@@ -385,6 +438,20 @@ def run_atp_solver(
     base_name = atp_path.stem
     start_wall_time = time.time()
     start_monotonic = time.monotonic()
+    temporary_snapshot = _snapshot_matching_files(
+        working_directory,
+        _is_atp_temporary_file,
+    )
+    def _is_current_atp_result(path: Path) -> bool:
+        return (
+            _is_cancelled_atp_result(path)
+            and path.stem.lower() == base_name.lower()
+        )
+
+    result_snapshot = _snapshot_matching_files(
+        working_directory,
+        _is_current_atp_result,
+    )
 
     lis_snapshot: dict[str, tuple[int, int]] = {}
     for existing in list(working_directory.glob("*.lis")) + list(working_directory.glob("*.LIS")):
@@ -577,21 +644,25 @@ def run_atp_solver(
             and (time.monotonic() - last_change_monotonic) >= required_stable_window_sec
         )
 
+    def _cleanup_cancelled_results() -> list[Path]:
+        return _remove_files_changed_since_snapshot(
+            working_directory,
+            result_snapshot,
+            _is_current_atp_result,
+        )
+
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
                 _notify("Cancellation requested. Stopping ATP process...")
                 _update_lis_state(0.0)
-                cancelled_lis_path = (
-                    lis_path
-                    if lis_path is not None and _is_recent_lis(lis_path)
-                    else None
-                )
                 _terminate_process_tree(process)
-                raise ATPExecutionCancelled(
-                    "Simulacao ATP cancelada pelo usuario",
-                    lis_path=cancelled_lis_path,
-                )
+                removed_results = _cleanup_cancelled_results()
+                if removed_results:
+                    _notify(
+                        f"Removed {len(removed_results)} incomplete ATP result file(s)."
+                    )
+                raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
 
             now_monotonic = time.monotonic()
             elapsed_total = now_monotonic - start_monotonic
@@ -731,6 +802,19 @@ def run_atp_solver(
             auto_enter_thread.join(timeout=1.0)
         output_thread.join(timeout=1.0)
         _cleanup_direct_solver_support(direct_support_files)
+        removed_temporary = _remove_files_changed_since_snapshot(
+            working_directory,
+            temporary_snapshot,
+            _is_atp_temporary_file,
+        )
+        if removed_temporary:
+            _notify(f"Removed {len(removed_temporary)} ATP temporary file(s).")
+
+    if cancel_event is not None and cancel_event.is_set():
+        removed_results = _cleanup_cancelled_results()
+        if removed_results:
+            _notify(f"Removed {len(removed_results)} incomplete ATP result file(s).")
+        raise ATPExecutionCancelled("Simulacao ATP cancelada pelo usuario")
 
     elapsed = time.monotonic() - start_monotonic
 

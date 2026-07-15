@@ -4,7 +4,11 @@ from lis_analysis.solver.atp_runner import (
     ATP_DIRECT_SUPPORT_FILES,
     _cleanup_direct_solver_support,
     _discover_atp_executables,
+    _is_atp_temporary_file,
+    _is_cancelled_atp_result,
     _lis_has_completion_marker,
+    _remove_files_changed_since_snapshot,
+    _snapshot_matching_files,
     _stage_direct_solver_support,
 )
 
@@ -104,3 +108,51 @@ def test_discovers_executables_in_nonstandard_atp_root(tmp_path: Path):
 
     assert found_wrapper == wrapper
     assert found_direct == direct
+
+
+def test_temporary_cleanup_removes_only_new_or_changed_atp_scratch_files(tmp_path: Path):
+    unchanged = tmp_path / "old.tmp"
+    changed = tmp_path / "dum9.bin"
+    pl4_result = tmp_path / "caso.pl4"
+    unchanged.write_text("keep", encoding="utf-8")
+    changed.write_text("old", encoding="utf-8")
+    pl4_result.write_text("result", encoding="utf-8")
+
+    snapshot = _snapshot_matching_files(tmp_path, _is_atp_temporary_file)
+    changed.write_text("new content", encoding="utf-8")
+    created = tmp_path / "123456.tmp"
+    created.write_text("scratch", encoding="utf-8")
+
+    removed = _remove_files_changed_since_snapshot(
+        tmp_path,
+        snapshot,
+        _is_atp_temporary_file,
+    )
+
+    assert set(removed) == {changed, created}
+    assert unchanged.exists()
+    assert pl4_result.exists()
+
+
+def test_cancelled_result_cleanup_preserves_unchanged_previous_results(tmp_path: Path):
+    unchanged = tmp_path / "anterior.lis"
+    changed = tmp_path / "caso.pl4"
+    debug = tmp_path / "caso.dbg"
+    unchanged.write_text("valid old result", encoding="utf-8")
+    changed.write_text("old plot", encoding="utf-8")
+    debug.write_text("old debug", encoding="utf-8")
+
+    snapshot = _snapshot_matching_files(tmp_path, _is_cancelled_atp_result)
+    changed.write_text("incomplete plot from cancelled run", encoding="utf-8")
+    partial = tmp_path / "parcial.lis"
+    partial.write_text("incomplete", encoding="utf-8")
+
+    removed = _remove_files_changed_since_snapshot(
+        tmp_path,
+        snapshot,
+        _is_cancelled_atp_result,
+    )
+
+    assert set(removed) == {changed, partial}
+    assert unchanged.exists()
+    assert debug.exists()

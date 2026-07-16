@@ -219,7 +219,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.risk_width_var = tk.StringVar(value="2.0")
         self.risk_subconductors_var = tk.StringVar(value="4")
         self.risk_insulation_distance_var = tk.StringVar(value="3.50")
-        self.risk_parallel_gaps_var = tk.StringVar(value="804")
+        self.risk_tower_count_var = tk.StringVar(value="201")
+        self.risk_insulator_chains_per_tower_var = tk.StringVar(value="4")
         
         # Opções (checkboxes)
         self.show_plots_var = tk.BooleanVar(value=False)
@@ -357,7 +358,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.risk_width_var.set(data.get('risk_tower_width_m', '2.0'))
                 self.risk_subconductors_var.set(data.get('risk_subconductors', '4'))
                 self.risk_insulation_distance_var.set(data.get('risk_insulation_distance_m', '3.50'))
-                self.risk_parallel_gaps_var.set(data.get('risk_parallel_gaps', '804'))
+                tower_count = data.get('risk_tower_count')
+                chains_per_tower = data.get('risk_insulator_chains_per_tower')
+                if tower_count is None or chains_per_tower is None:
+                    tower_count, chains_per_tower = self._split_legacy_parallel_gaps(
+                        data.get('risk_parallel_gaps', '804')
+                    )
+                self.risk_tower_count_var.set(tower_count)
+                self.risk_insulator_chains_per_tower_var.set(chains_per_tower)
                 
                 # Carregar opções de gráfico
                 self.plot_bars_var.set(data.get('plot_bars', True))
@@ -394,7 +402,10 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'risk_tower_width_m': self.risk_width_var.get(),
                 'risk_subconductors': self.risk_subconductors_var.get(),
                 'risk_insulation_distance_m': self.risk_insulation_distance_var.get(),
-                'risk_parallel_gaps': self.risk_parallel_gaps_var.get(),
+                'risk_tower_count': self.risk_tower_count_var.get(),
+                'risk_insulator_chains_per_tower': (
+                    self.risk_insulator_chains_per_tower_var.get()
+                ),
                 'plot_bars': self.plot_bars_var.get(),
                 'plot_points': self.plot_points_var.get(),
                 'plot_gaussian': self.plot_gaussian_var.get(),
@@ -626,7 +637,11 @@ class ModernLisAnalysisApp(ctk.CTk):
             ("Largura da torre S [m]", self.risk_width_var),
             ("Subcondutores/fase N", self.risk_subconductors_var),
             ("Menor distância de isolamento d [m]", self.risk_insulation_distance_var),
-            ("Gaps em paralelo n (201 x 4)", self.risk_parallel_gaps_var),
+            ("Quantidade de torres", self.risk_tower_count_var),
+            (
+                "Cadeias de isoladores por torre",
+                self.risk_insulator_chains_per_tower_var,
+            ),
         ]
         self._risk_entries = []
         for idx, (label, variable) in enumerate(risk_fields):
@@ -678,9 +693,39 @@ class ModernLisAnalysisApp(ctk.CTk):
         except ValueError as exc:
             raise ValueError(f"{field_name} inválido: {raw_value}") from exc
 
+    @staticmethod
+    def _parse_positive_count(raw_value: str, field_name: str) -> int:
+        value = ModernLisAnalysisApp._parse_risk_number(raw_value, field_name)
+        if value <= 0 or not value.is_integer():
+            raise ValueError(
+                f"{field_name} deve ser um número inteiro maior que zero"
+            )
+        return int(value)
+
+    @staticmethod
+    def _split_legacy_parallel_gaps(raw_value: str) -> tuple[str, str]:
+        try:
+            value = float(str(raw_value).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            return "201", "4"
+        if value <= 0 or not value.is_integer():
+            return "201", "4"
+        total = int(value)
+        if total % 4 == 0:
+            return str(total // 4), "4"
+        return str(total), "1"
+
     def _collect_risk_config(self) -> FailureRiskConfig | None:
         if not self.enable_risk_var.get():
             return None
+
+        tower_count = self._parse_positive_count(
+            self.risk_tower_count_var.get(), "Quantidade de torres"
+        )
+        chains_per_tower = self._parse_positive_count(
+            self.risk_insulator_chains_per_tower_var.get(),
+            "Cadeias de isoladores por torre",
+        )
 
         config = FailureRiskConfig(
             base_voltage_kv=self._parse_risk_number(self.risk_base_voltage_var.get(), "Tensão-base"),
@@ -691,7 +736,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             insulation_distance_m=self._parse_risk_number(
                 self.risk_insulation_distance_var.get(), "d"
             ),
-            parallel_gaps=self._parse_risk_number(self.risk_parallel_gaps_var.get(), "n"),
+            parallel_gaps=tower_count * chains_per_tower,
         )
         calculate_failure_risk(1.0, 0.1, config)
         return config

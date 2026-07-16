@@ -17,15 +17,16 @@ from typing import Optional, Tuple, List, Dict
 import pandas as pd
 import numpy as np
 import matplotlib
+
+# No modo GUI, os gráficos são gerados por threads de trabalho. O Agg nunca cria
+# objetos Tk fora da thread principal; o modo de linha de comando mantém seu backend.
+if len(sys.argv) == 1 or "--gui" in sys.argv:
+    matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 from openpyxl.utils import get_column_letter
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-
-# Configurar matplotlib para usar backend não-GUI por padrão (evita warnings em threads)
-# O backend será alterado para TkAgg apenas quando mostrar=True
-# IMPORTANTE: Não forçar backend aqui para permitir que GUI funcione
-# matplotlib.use('Agg')  # COMENTADO para evitar conflito com customtkinter
 
 # ------------------ Configurações e regex ------------------
 START_MARKER = "The following is a distribution of peak overvoltages"

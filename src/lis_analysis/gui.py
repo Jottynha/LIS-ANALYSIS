@@ -1,4 +1,5 @@
 import threading
+import queue
 import traceback
 import json
 import re
@@ -77,6 +78,12 @@ def _ensure_pipeline_imports():
         if _pipeline_imported:
             return
 
+        # O pipeline é executado fora da thread do Tk. O Agg apenas grava
+        # arquivos e nunca cria janelas Tk a partir da thread de trabalho.
+        if "matplotlib.pyplot" not in sys.modules:
+            import matplotlib
+            matplotlib.use("Agg")
+
         from .main import (
             parse_lis_table as _parse_lis_table,
             parse_lis_once as _parse_lis_once,
@@ -119,11 +126,8 @@ def _ensure_plot_imports():
         if plt is None:
             import matplotlib
 
-            if 'matplotlib.pyplot' not in sys.modules:
-                try:
-                    matplotlib.use('TkAgg')
-                except Exception:
-                    pass
+            if "matplotlib.pyplot" not in sys.modules:
+                matplotlib.use("Agg")
 
             import matplotlib.pyplot as _plt
             plt = _plt
@@ -180,6 +184,10 @@ def _read_text_lines_preserve_newlines(path: Path) -> list[str]:
 class ModernLisAnalysisApp(ctk.CTk):
     def __init__(self, folder: Path, outdir: Path, start_index: int = 1):
         super().__init__()
+
+        self._ui_thread_id = threading.get_ident()
+        self._ui_task_queue = queue.Queue()
+        self._ui_queue_closed = False
         
         # Configurações da janela
         self.title("LIS Analysis")
@@ -295,6 +303,37 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         # Refresh inicial
         self.after(100, self.refresh_list)
+        self.after(25, self._drain_ui_tasks)
+
+    def _run_on_ui_thread(self, callback, *args, **kwargs):
+        """Executa uma operação de interface somente na thread principal do Tk."""
+        if self._ui_queue_closed:
+            return
+        if threading.get_ident() == self._ui_thread_id:
+            callback(*args, **kwargs)
+            return
+        self._ui_task_queue.put((callback, args, kwargs))
+
+    def _drain_ui_tasks(self):
+        """Processa na thread principal do Tk os eventos enviados pelos workers."""
+        if self._ui_queue_closed:
+            return
+
+        for _ in range(200):
+            try:
+                callback, args, kwargs = self._ui_task_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                callback(*args, **kwargs)
+            except Exception:
+                traceback.print_exc()
+
+        if not self._ui_queue_closed:
+            self.after(25, self._drain_ui_tasks)
+
+    def _set_status(self, message: str):
+        self._run_on_ui_thread(self.status_var.set, message)
     
     def _load_prefs(self):
         """Carrega preferências salvas"""
@@ -370,6 +409,7 @@ class ModernLisAnalysisApp(ctk.CTk):
     def _on_closing(self):
         """Handler para fechamento da janela"""
         self._save_prefs()
+        self._ui_queue_closed = True
         self.destroy()
     
     def _build_ui(self):
@@ -1085,6 +1125,9 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _set_main_progress(self, value: float):
         """Atualiza barra principal somente se o widget existir."""
+        if threading.get_ident() != self._ui_thread_id:
+            self._run_on_ui_thread(self._set_main_progress, value)
+            return
         if self.progress_bar is None:
             return
         try:
@@ -1103,6 +1146,9 @@ class ModernLisAnalysisApp(ctk.CTk):
 
     def _hide_main_cancel(self):
         """Oculta botão de cancelar somente se o widget existir."""
+        if threading.get_ident() != self._ui_thread_id:
+            self._run_on_ui_thread(self._hide_main_cancel)
+            return
         if self.cancel_btn is None:
             return
         try:
@@ -2136,7 +2182,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         run_dir: Path,
         *,
         plot_options: dict,
-        show_plots: bool,
         hide_errors: bool,
         only_comparative: bool,
         report_progress=None,
@@ -2177,13 +2222,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                         report_progress(f"Aviso: falha no cálculo de risco: {exc}")
 
             if not only_comparative:
-                graph_name = f"grafico_{lis_path.stem}.png"
+                graph_path = run_dir / f"grafico_{lis_path.stem}.png"
                 self._criar_grafico_customizado(
                     excel_path,
                     run_dir,
-                    graph_name,
+                    graph_path.name,
                     plot_options,
-                    mostrar=show_plots,
+                    mostrar=False,
                 )
 
         try:
@@ -2192,11 +2237,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if excel_path is None:
                     excel_path = run_dir / f"{lis_path.stem}.xlsx"
                 save_time_series_to_excel(time_series_df, excel_path)
+                series_path = run_dir / f"series_temporais_{lis_path.stem}.png"
                 criar_grafico_series_temporais(
                     time_series_df,
-                    run_dir / f"series_temporais_{lis_path.stem}.png",
+                    series_path,
                     lis_name=lis_path.name,
-                    mostrar=show_plots,
+                    mostrar=False,
                 )
         except Exception as exc:
             if not hide_errors and report_progress is not None:
@@ -2546,17 +2592,16 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         def worker():
             def report_progress(message: str):
-                self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
+                self._run_on_ui_thread(self._on_atp_progress_message, message)
 
             def event_callback(event: dict):
-                self.after(0, lambda payload=event: self._on_atp_sweep_event(payload))
+                self._run_on_ui_thread(self._on_atp_sweep_event, event)
 
             def lis_parser(lis_path: Path, run_dir: Path, _value: float, _idx: int, _total: int):
                 return self._postprocess_atp_sweep_lis(
                     lis_path,
                     run_dir,
                     plot_options=plot_options,
-                    show_plots=show_plots,
                     hide_errors=hide_errors,
                     only_comparative=only_comparative,
                     report_progress=report_progress,
@@ -2579,9 +2624,16 @@ class ModernLisAnalysisApp(ctk.CTk):
                     max_parallel_runs=parallel_runs,
                     atp_executable_path=atp_executable_path,
                 )
-                self.after(0, lambda data=summary: self._on_atp_parameter_sweep_finished(data))
+                self._run_on_ui_thread(
+                    self._on_atp_parameter_sweep_finished,
+                    summary,
+                )
             except Exception as exc:
-                self.after(0, lambda msg=str(exc): self._on_atp_simulation_finished(False, msg))
+                self._run_on_ui_thread(
+                    self._on_atp_simulation_finished,
+                    False,
+                    str(exc),
+                )
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2750,8 +2802,17 @@ class ModernLisAnalysisApp(ctk.CTk):
             except Exception as e:
                 self._show_error("Erro", "Falha ao salvar registros.", details=[("Detalhes", str(e))])
     
+    def _write_log_snapshot(self, target: Path):
+        """Grava o registro visível a partir da thread principal do Tk."""
+        content = self.log_textbox.get("1.0", "end")
+        target.write_text(content, encoding="utf-8")
+        self.log(f"Log salvo: {target.name}")
+
     def log(self, message: str):
         """Adiciona mensagem ao log"""
+        if threading.get_ident() != self._ui_thread_id:
+            self._run_on_ui_thread(self.log, message)
+            return
         timestamp = datetime.now().strftime("%H:%M:%S")
         full_msg = f"[{timestamp}] {message}\n"
         self.log_textbox.configure(state="normal")
@@ -3033,15 +3094,13 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         def worker():
             def report_progress(message: str):
-                self.after(0, lambda msg=message: self._on_atp_progress_message(msg))
+                self._run_on_ui_thread(self._on_atp_progress_message, message)
 
             def report_solver_progress(progress: float, detail: str):
-                self.after(
-                    0,
-                    lambda value=progress, text=detail: self._on_atp_solver_progress(
-                        value,
-                        text,
-                    ),
+                self._run_on_ui_thread(
+                    self._on_atp_solver_progress,
+                    progress,
+                    detail,
                 )
 
             parametrized_exec_atp = None
@@ -3191,14 +3250,19 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                     if not only_comparative:
                         report_progress("Gerando gráfico com os dados analisados...")
-                        graph_name = f"grafico_{lis_target.stem}.png"
+                        graph_path = sim_outdir / f"grafico_{lis_target.stem}.png"
                         self._criar_grafico_customizado(
                             excel_path,
                             sim_outdir,
-                            graph_name,
+                            graph_path.name,
                             plot_options,
-                            mostrar=show_plots,
+                            mostrar=False,
                         )
+                        if show_plots and graph_path.exists():
+                            self._run_on_ui_thread(
+                                self._open_file_in_editor,
+                                graph_path,
+                            )
                     else:
                         report_progress("Gráfico individual ignorado porque somente o comparativo foi solicitado.")
 
@@ -3212,12 +3276,20 @@ class ModernLisAnalysisApp(ctk.CTk):
                         if excel_path is None:
                             excel_path = sim_outdir / f"{lis_target.stem}.xlsx"
                         save_time_series_to_excel(time_series_df, excel_path)
+                        series_path = (
+                            sim_outdir / f"series_temporais_{lis_target.stem}.png"
+                        )
                         criar_grafico_series_temporais(
                             time_series_df,
-                            sim_outdir / f"series_temporais_{lis_target.stem}.png",
+                            series_path,
                             lis_name=lis_target.name,
-                            mostrar=show_plots,
+                            mostrar=False,
                         )
+                        if show_plots and series_path.exists():
+                            self._run_on_ui_thread(
+                                self._open_file_in_editor,
+                                series_path,
+                            )
                 except Exception as e:
                     if not hide_errors:
                         report_progress(f"Aviso: falha em séries temporais: {e}")
@@ -3241,7 +3313,11 @@ class ModernLisAnalysisApp(ctk.CTk):
                     "table_warning": table_warning,
                     "risk_report_path": str(risk_report_path) if risk_report_path else None,
                 }
-                self.after(0, lambda data=payload: self._on_atp_simulation_finished(True, data))
+                self._run_on_ui_thread(
+                    self._on_atp_simulation_finished,
+                    True,
+                    payload,
+                )
             except ATPExecutionCancelled:
                 self._cleanup_cancelled_atp_artifacts(
                     source_atp=Path(atp_file),
@@ -3249,10 +3325,13 @@ class ModernLisAnalysisApp(ctk.CTk):
                     generated_lis=generated_lis_path,
                     simulation_dir=sim_outdir,
                 )
-                self.after(0, self._on_atp_simulation_cancelled)
+                self._run_on_ui_thread(self._on_atp_simulation_cancelled)
             except Exception as e:
-                error_msg = str(e)
-                self.after(0, lambda msg=error_msg: self._on_atp_simulation_finished(False, msg))
+                self._run_on_ui_thread(
+                    self._on_atp_simulation_finished,
+                    False,
+                    str(e),
+                )
             finally:
                 cleanup_staged_atp_result(generated_lis_path)
                 if parametrized_exec_atp is not None and parametrized_exec_atp.exists():
@@ -3561,17 +3640,21 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error("Erro ao abrir", "Falha ao abrir arquivo.", details=[("Detalhes", str(e))])
     
     def _process_selected(self):
-        """Processar arquivos .lis selecionados"""
-        # Coletar arquivos selecionados
-        selected_files = []
-        for file_str, var in self.file_selection_vars.items():
-            if var.get():
-                selected_files.append(Path(file_str))
-        
+        """Processa os arquivos .lis selecionados em uma thread de trabalho."""
+        selected_files = [
+            Path(file_str)
+            for file_str, var in self.file_selection_vars.items()
+            if var.get()
+        ]
+
         if not selected_files:
-            self._show_warning("Aviso", "Nenhum arquivo selecionado.", details=[("Ação", "Marque os arquivos que deseja processar.")])
+            self._show_warning(
+                "Aviso",
+                "Nenhum arquivo selecionado.",
+                details=[("Ação", "Marque os arquivos que deseja processar.")],
+            )
             return
-        
+
         try:
             risk_config = self._collect_risk_config()
         except ValueError as exc:
@@ -3582,85 +3665,78 @@ class ModernLisAnalysisApp(ctk.CTk):
             )
             return
 
+        # As variáveis Tk são lidas uma única vez pela thread da interface.
+        # O worker recebe valores Python comuns e nunca acessa widgets diretamente.
+        base_outdir = Path(self.outdir_var.get())
+        plot_options = {
+            "show_bars": self.plot_bars_var.get(),
+            "show_points": self.plot_points_var.get(),
+            "show_gaussian": self.plot_gaussian_var.get(),
+            "show_cumulative": self.plot_cumulative_var.get(),
+            "show_stats_box": self.plot_stats_box_var.get(),
+            "risk_config": risk_config,
+        }
+        show_plots = self.show_plots_var.get()
+        only_comparative = self.only_comparative_var.get()
+        hide_errors = self.hide_errors_var.get()
+        save_logs = self.save_logs_var.get()
+        open_output = self.open_output_var.get()
+
         self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
-        self.status_var.set(f"Processando {len(selected_files)} arquivo(s)...")
-        
-        # Mostrar botão de cancelar
+        self._set_status(f"Processando {len(selected_files)} arquivo(s)...")
         self._show_main_cancel()
-        
+
         def worker():
             try:
                 _ensure_pipeline_imports()
-                base_outdir = Path(self.outdir_var.get())
                 base_outdir.mkdir(parents=True, exist_ok=True)
-                
-                # Criar subpasta com data e hora
+
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 outdir = base_outdir / timestamp
                 outdir.mkdir(parents=True, exist_ok=True)
-                
                 self.log(f"Criada pasta de saída: {outdir.name}")
-                
-                # Coletar opções de visualização
-                plot_options = {
-                    'show_bars': self.plot_bars_var.get(),
-                    'show_points': self.plot_points_var.get(),
-                    'show_gaussian': self.plot_gaussian_var.get(),
-                    'show_cumulative': self.plot_cumulative_var.get(),
-                    'show_stats_box': self.plot_stats_box_var.get(),
-                    'risk_config': risk_config,
-                }
-                
-                excel_paths = []  # Armazenar paths dos Excel para comparativo
+
+                excel_paths = []
                 risk_records = []
                 total = len(selected_files)
-                
-                # NOTA: Processamento paralelo (parallel_process) desabilitado por segurança
-                # Para evitar conflitos de matplotlib em threads múltiplas
-                
+
                 for idx, lis_path in enumerate(selected_files, start=1):
                     if self.cancel_event.is_set():
                         self.log("Processamento cancelado pelo usuário")
                         break
-                    
-                    # Atualizar progresso
-                    progress = idx / total
-                    self._set_main_progress(progress)
-                    self.status_var.set(f"Processando {lis_path.name}... ({idx}/{total})")
-                    
+
+                    self._set_main_progress(idx / total)
+                    self._set_status(f"Processando {lis_path.name}... ({idx}/{total})")
                     self.log(f"Processando: {lis_path.name}")
-                    
-                    # Parse do .lis
+
                     parsed = parse_lis_once(lis_path, verbose=False)
-                    df, stats_lines, summary = parsed.table_df, parsed.stats_lines, parsed.summary
+                    df, summary = parsed.table_df, parsed.summary
                     if df is None:
                         self.log(f"Tabela não encontrada em: {lis_path.name}")
                         continue
-                    
-                    # Nome base do arquivo (sem extensão)
+
                     base_name = lis_path.stem
-                    
-                    # Salvar Excel com nome do arquivo .lis (sempre sobrescreve)
                     excel_path = outdir / f"{base_name}.xlsx"
                     save_df_to_excel_only(df, excel_path)
-                    excel_paths.append(excel_path)  # Adicionar à lista para comparativo
-                    
-                    # Estatísticas
+                    excel_paths.append(excel_path)
+
                     computed_stats = None
                     try:
                         computed_stats = calcular_estatisticas_do_df(df)
-                        escrever_estatisticas_excel(excel_path, computed_stats, summary_from_lis=summary)
-                    except Exception as e:
-                        error_msg = f"Erro ao calcular estatísticas: {e}"
-                        if not self.hide_errors_var.get():
+                        escrever_estatisticas_excel(
+                            excel_path,
+                            computed_stats,
+                            summary_from_lis=summary,
+                        )
+                    except Exception as exc:
+                        error_msg = f"Erro ao calcular estatísticas: {exc}"
+                        if not hide_errors:
                             self.log(error_msg)
-                            self.after(
-                                0,
-                                lambda msg=error_msg: self._show_warning(
-                                    "Aviso",
-                                    "Falha ao calcular estatísticas.",
-                                    details=[("Detalhes", msg)],
-                                ),
+                            self._run_on_ui_thread(
+                                self._show_warning,
+                                "Aviso",
+                                "Falha ao calcular estatísticas.",
+                                details=[("Detalhes", error_msg)],
                             )
 
                     if risk_config is not None and computed_stats is not None:
@@ -3670,87 +3746,119 @@ class ModernLisAnalysisApp(ctk.CTk):
                                 computed_stats["std_dev"],
                                 risk_config,
                             )
-                            risk_records.append(self._failure_risk_record(lis_path.name, result))
+                            risk_records.append(
+                                self._failure_risk_record(lis_path.name, result)
+                            )
                         except Exception as exc:
-                            if not self.hide_errors_var.get():
-                                self.log(f"Falha ao calcular risco para {lis_path.name}: {exc}")
-                    
-                    # Gráfico individual (se não for modo "só comparativo")
-                    if not self.only_comparative_var.get():
-                        graph_name = f"grafico_{base_name}.png"
-                        self._criar_grafico_customizado(excel_path, outdir, graph_name, plot_options, mostrar=self.show_plots_var.get())
-                    
-                    # Séries temporais
+                            if not hide_errors:
+                                self.log(
+                                    f"Falha ao calcular risco para {lis_path.name}: {exc}"
+                                )
+
+                    if not only_comparative:
+                        graph_path = outdir / f"grafico_{base_name}.png"
+                        self._criar_grafico_customizado(
+                            excel_path,
+                            outdir,
+                            graph_path.name,
+                            plot_options,
+                            mostrar=False,
+                        )
+                        if show_plots and graph_path.exists():
+                            self._run_on_ui_thread(
+                                self._open_file_in_editor,
+                                graph_path,
+                            )
+
                     try:
                         time_series_df = parsed.time_series_df
                         if time_series_df is not None:
                             save_time_series_to_excel(time_series_df, excel_path)
-                            series_name = f"series_temporais_{base_name}.png"
-                            criar_grafico_series_temporais(time_series_df, outdir / series_name, lis_name=lis_path.name)
-                    except Exception as e:
-                        error_msg = f"Erro ao processar séries temporais: {e}"
-                        if not self.hide_errors_var.get():
-                            self.log(error_msg)
-                    
+                            series_path = outdir / f"series_temporais_{base_name}.png"
+                            criar_grafico_series_temporais(
+                                time_series_df,
+                                series_path,
+                                lis_name=lis_path.name,
+                                mostrar=False,
+                            )
+                            if show_plots and series_path.exists():
+                                self._run_on_ui_thread(
+                                    self._open_file_in_editor,
+                                    series_path,
+                                )
+                    except Exception as exc:
+                        if not hide_errors:
+                            self.log(f"Erro ao processar séries temporais: {exc}")
+
                     self.log(f"Concluído: {lis_path.name}")
-                
-                # Gerar gráfico comparativo se múltiplos arquivos
+
                 if len(excel_paths) > 1 and not self.cancel_event.is_set():
-                    self.log(f"Gerando gráfico comparativo de {len(excel_paths)} arquivos...")
-                    self.status_var.set("Gerando gráfico comparativo...")
-                    comp_name = f"comparativo_{timestamp}.png"
-                    self._criar_grafico_comparativo_customizado(excel_paths, outdir, comp_name, plot_options, mostrar=self.show_plots_var.get())
+                    self.log(
+                        f"Gerando gráfico comparativo de {len(excel_paths)} arquivos..."
+                    )
+                    self._set_status("Gerando gráfico comparativo...")
+                    comp_path = outdir / f"comparativo_{timestamp}.png"
+                    self._criar_grafico_comparativo_customizado(
+                        excel_paths,
+                        outdir,
+                        comp_path.name,
+                        plot_options,
+                        mostrar=False,
+                    )
+                    if show_plots and comp_path.exists():
+                        self._run_on_ui_thread(
+                            self._open_file_in_editor,
+                            comp_path,
+                        )
                     self.log("Gráfico comparativo gerado com sucesso")
-                
-                # Salvar log se habilitado
-                if self.save_logs_var.get():
-                    log_content = self.log_textbox.get("1.0", "end")
+
+                if save_logs:
                     log_file = outdir / f"log_{timestamp}.txt"
-                    log_file.write_text(log_content, encoding='utf-8')
-                    self.log(f"Log salvo: {log_file.name}")
-                
-                # Finalizar
+                    self._run_on_ui_thread(self._write_log_snapshot, log_file)
+
                 if risk_records:
                     self._write_failure_risk_report(
                         outdir,
                         "Análise de arquivos LIS",
                         risk_records,
                     )
+
                 self._set_main_progress(1.0)
-                self.status_var.set(f"Processamento concluído! {len(selected_files)} arquivo(s)")
-                self.log(f"Processamento finalizado com sucesso em: {outdir.name}")
-                
-                if self.open_output_var.get():
-                    _open_in_file_manager(outdir)
-                
-                self.after(
-                    0,
-                    lambda total=len(selected_files), result_outdir=str(outdir): self._show_success(
-                        "Processamento concluído",
-                        f"{total} arquivo(s) processado(s) com sucesso.",
-                        details=[("Resultados", result_outdir)],
-                    ),
+                self._set_status(
+                    f"Processamento concluído! {len(selected_files)} arquivo(s)"
                 )
-                
-            except Exception as e:
-                self.log(f"Erro durante processamento: {e}")
-                self.after(
-                    0,
-                    lambda msg=str(e): self._show_error(
-                        "Erro",
-                        "Erro durante processamento.",
-                        details=[("Detalhes", msg)],
-                    ),
+                self.log(
+                    f"Processamento finalizado com sucesso em: {outdir.name}"
+                )
+
+                if open_output:
+                    _open_in_file_manager(outdir)
+
+                self._run_on_ui_thread(
+                    self._show_success,
+                    "Processamento concluído",
+                    f"{len(selected_files)} arquivo(s) processado(s) com sucesso.",
+                    details=[("Resultados", str(outdir))],
+                )
+
+            except Exception as exc:
+                self.log(f"Erro durante processamento: {exc}")
+                self._run_on_ui_thread(
+                    self._show_error,
+                    "Erro",
+                    "Erro durante processamento.",
+                    details=[("Detalhes", str(exc))],
                 )
             finally:
-                self._hide_main_cancel()
+                was_cancelled = self.cancel_event.is_set()
                 self.cancel_event.clear()
+                self._hide_main_cancel()
                 self._set_main_progress(0)
-                if not self.cancel_event.is_set():
-                    self.status_var.set("Pronto")
-        
+                if not was_cancelled:
+                    self._set_status("Pronto")
+
         threading.Thread(target=worker, daemon=True).start()
-    
+
     def _criar_grafico_customizado(self, excel_path: Path, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
         """Cria gráfico individual com opções customizadas de visualização"""
         try:

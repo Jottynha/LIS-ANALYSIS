@@ -2592,10 +2592,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._show_error("Erro", "Arquivo .atp não encontrado.")
             return
 
-        executable_ready, atp_executable_path = self._resolve_atp_executable_for_run()
-        if not executable_ready:
-            return
-
         if not self._atp_elements_cache:
             self._load_atp_parameters(show_dialog_errors=False)
 
@@ -2958,6 +2954,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         atp_file = self.atp_file_var.get().strip()
         if not atp_file or not Path(atp_file).exists():
             self._show_error("Erro", "Arquivo .atp não encontrado.")
+            return
+
+        executable_ready, atp_executable_path = self._resolve_atp_executable_for_run()
+        if not executable_ready:
             return
 
         missing_insert_dependencies = get_missing_insert_dependencies(atp_file)

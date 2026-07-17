@@ -81,6 +81,22 @@ def _extract_numeric_fields(line: str) -> list[dict[str, Any]]:
     return fields
 
 
+def _fixed_width_field(
+    raw_line: str,
+    field: dict[str, Any],
+    start: int,
+    end: int,
+) -> dict[str, Any]:
+    """Usa a coluna fixa ATP quando o token detectado estiver dentro dela."""
+    adjusted = dict(field)
+    field_start = int(field["start"])
+    field_end = int(field["end"])
+    if start <= field_start and field_end <= end and end <= len(raw_line):
+        adjusted["start"] = start
+        adjusted["end"] = end
+    return adjusted
+
+
 def _mk_param(value: float, field: dict[str, Any], editable: bool = True) -> dict[str, Any]:
     return {
         "value": float(value),
@@ -120,14 +136,22 @@ def _parse_branch_line(
             capacitance_is_control_default = True
 
     params: dict[str, dict[str, Any]] = {
-        "resistance": _mk_param(resistance, numeric_fields[0], editable=True)
+        "resistance": _mk_param(
+            resistance,
+            _fixed_width_field(raw_line, numeric_fields[0], 26, 32),
+            editable=True,
+        )
     }
     if inductance is not None:
-        params["inductance"] = _mk_param(inductance, numeric_fields[1], editable=True)
+        params["inductance"] = _mk_param(
+            inductance,
+            _fixed_width_field(raw_line, numeric_fields[1], 32, 38),
+            editable=True,
+        )
     if capacitance is not None and len(numeric_fields) >= 3:
         params["capacitance"] = _mk_param(
             capacitance,
-            numeric_fields[2],
+            _fixed_width_field(raw_line, numeric_fields[2], 38, 44),
             editable=not capacitance_is_control_default,
         )
 
@@ -157,8 +181,16 @@ def _parse_switch_line(tokens: list[str], raw_line: str, line_index: int) -> dic
         "t_close": t_close,
         "delay": delay,
         "parameters": {
-            "t_close": _mk_param(t_close, numeric_fields[0], editable=True),
-            "delay": _mk_param(delay, numeric_fields[1], editable=True),
+            "t_close": _mk_param(
+                t_close,
+                _fixed_width_field(raw_line, numeric_fields[0], 14, 24),
+                editable=True,
+            ),
+            "delay": _mk_param(
+                delay,
+                _fixed_width_field(raw_line, numeric_fields[1], 24, 34),
+                editable=True,
+            ),
         },
         "raw_line": raw_line,
         "line_index": line_index,
@@ -176,11 +208,23 @@ def _parse_source_line(tokens: list[str], raw_line: str, line_index: int) -> dic
     phase = float(numeric_fields[2]["value"]) if len(numeric_fields) >= 3 else None
 
     params: dict[str, dict[str, Any]] = {
-        "amplitude": _mk_param(amplitude, numeric_fields[0], editable=True),
-        "frequency": _mk_param(frequency, numeric_fields[1], editable=True),
+        "amplitude": _mk_param(
+            amplitude,
+            _fixed_width_field(raw_line, numeric_fields[0], 10, 20),
+            editable=True,
+        ),
+        "frequency": _mk_param(
+            frequency,
+            _fixed_width_field(raw_line, numeric_fields[1], 20, 30),
+            editable=True,
+        ),
     }
     if phase is not None:
-        params["phase"] = _mk_param(phase, numeric_fields[2], editable=True)
+        params["phase"] = _mk_param(
+            phase,
+            _fixed_width_field(raw_line, numeric_fields[2], 30, 40),
+            editable=True,
+        )
 
     return {
         "type": "source",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 import time
@@ -284,6 +285,115 @@ class BatchRunnerExecutionTest(unittest.TestCase):
                 self.assertTrue(result.lis_path.exists())
                 self.assertAlmostEqual(self._read_branch_resistance(result.atp_path), expected_value)
 
+
+
+    def test_resistance_sweep_100_to_1000_preserves_step_50_and_unique_folders(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            output_root = root / "out"
+            self._create_base_atp(base_atp)
+            branch = next(
+                element
+                for element in parse_atp_file(base_atp)
+                if element.get("type") == "branch"
+            )
+            parameter = SweepParameterRef(
+                line_index=int(branch["line_index"]),
+                parameter="resistance",
+                element_name="branch",
+            )
+            observed_values = []
+            isolated_workspaces = []
+
+            def fake_solver(atp_file_path: str, **_kwargs) -> str:
+                atp_path = Path(atp_file_path)
+                observed_values.append(self._read_branch_resistance(atp_path))
+                isolated_workspaces.append("_solver_workspace" in atp_path.parts)
+                lis_path = atp_path.with_suffix(".lis")
+                lis_path.write_text("OK\n", encoding="latin-1")
+                return str(lis_path)
+
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id=parameter,
+                start=100,
+                stop=1000,
+                step=50,
+                output_dir=output_root,
+                solver_runner=fake_solver,
+            )
+
+            expected = [float(value) for value in range(100, 1001, 50)]
+            self.assertEqual(summary.values, expected)
+            self.assertEqual(observed_values, expected)
+            self.assertEqual(summary.success_count, 19)
+            self.assertTrue(all(isolated_workspaces))
+            self.assertEqual(
+                [self._read_branch_resistance(result.atp_path) for result in summary.results],
+                expected,
+            )
+            self.assertEqual(
+                len({result.run_dir.name for result in summary.results}),
+                19,
+            )
+
+            plan = json.loads(
+                (summary.output_dir / "plano_execucao.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(plan["start"], 100.0)
+            self.assertEqual(plan["stop"], 1000.0)
+            self.assertEqual(plan["step"], 50.0)
+            self.assertEqual(plan["values"], expected)
+
+            second_summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id=parameter,
+                start=100,
+                stop=100,
+                step=50,
+                output_dir=output_root,
+                solver_runner=fake_solver,
+            )
+            self.assertNotEqual(summary.output_dir, second_summary.output_dir)
+            self.assertTrue(summary.output_dir.exists())
+            self.assertTrue(second_summary.output_dir.exists())
+
+    def test_sweep_rejects_value_that_does_not_fit_atp_field(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            base_atp = root / "caso.atp"
+            self._create_base_atp(base_atp)
+            branch = next(
+                element
+                for element in parse_atp_file(base_atp)
+                if element.get("type") == "branch"
+            )
+            solver_called = False
+
+            def fake_solver(_atp_file_path: str, **_kwargs) -> str:
+                nonlocal solver_called
+                solver_called = True
+                raise AssertionError("O solver não deveria ser chamado")
+
+            summary = run_parameter_sweep(
+                base_atp_path=base_atp,
+                parameter_id={
+                    "line_index": branch["line_index"],
+                    "parameter": "resistance",
+                },
+                start=1234567,
+                stop=1234567,
+                step=1,
+                output_dir=root / "out",
+                solver_runner=fake_solver,
+            )
+
+            self.assertFalse(solver_called)
+            self.assertEqual(summary.failure_count, 1)
+            self.assertIn("não cabe no campo ATP", summary.results[0].error or "")
 
     def test_cancel_marks_unstarted_runs_and_reports_partial_progress(self):
         with tempfile.TemporaryDirectory() as tmpdir:

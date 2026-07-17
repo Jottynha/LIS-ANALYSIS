@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
+import math
 import shutil
 import threading
 import time
@@ -9,6 +11,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 
 from .atp_parser import parse_atp_file_cached
 from .atp_writer import apply_parameter_overrides
@@ -167,8 +170,10 @@ def run_parameter_sweep(
 
     sweep_root = Path(output_dir)
     sweep_root.mkdir(parents=True, exist_ok=True)
-    sweep_dir = sweep_root / f"sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    sweep_dir.mkdir(parents=True, exist_ok=True)
+    sweep_dir = sweep_root / (
+        f"sweep_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
+    )
+    sweep_dir.mkdir(parents=True, exist_ok=False)
 
     summary = SweepExecutionSummary(
         parameter=parameter_ref,
@@ -190,6 +195,29 @@ def run_parameter_sweep(
         for run_index, value in enumerate(values, start=1)
     ]
 
+    plan_path = sweep_dir / "plano_execucao.json"
+    plan = {
+        "parameter": parameter_ref.display_label,
+        "line_index": parameter_ref.line_index,
+        "field": parameter_ref.parameter,
+        "start": float(start),
+        "stop": float(stop),
+        "step": float(step),
+        "values": values,
+        "runs": [
+            {
+                "index": result.run_index,
+                "value": result.value,
+                "directory": result.run_dir.name,
+            }
+            for result in summary.results
+        ],
+    }
+    plan_path.write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     parallel_runs = _resolve_parallel_runs(max_parallel_runs, total_runs)
     if parallel_runs > 1 and not continue_on_error:
         parallel_runs = 1
@@ -208,25 +236,25 @@ def run_parameter_sweep(
         )
 
     isolated_dependency_files: tuple[tuple[Path, Path], ...] = ()
-    if parallel_runs > 1:
-        dependency_plan = _collect_isolated_workspace_dependencies(base_path)
-        if dependency_plan is None:
-            parallel_runs = 1
-            _emit_event(
-                event_callback,
-                type="sweep_mode_adjusted",
-                message=(
-                    "Execução paralela desabilitada: foram detectados comandos $INSERT "
-                    "relativos fora da pasta base do ATP."
-                ),
-                run_index=0,
-                total_runs=total_runs,
-                value=None,
-                progress=0.0,
-                output_dir=sweep_dir,
-            )
-        else:
-            isolated_dependency_files = dependency_plan
+    dependency_plan = _collect_isolated_workspace_dependencies(base_path)
+    isolate_runs = dependency_plan is not None
+    if dependency_plan is not None:
+        isolated_dependency_files = dependency_plan
+    elif parallel_runs > 1:
+        parallel_runs = 1
+        _emit_event(
+            event_callback,
+            type="sweep_mode_adjusted",
+            message=(
+                "Execução paralela desabilitada: foram detectados comandos $INSERT "
+                "relativos fora da pasta base do ATP."
+            ),
+            run_index=0,
+            total_runs=total_runs,
+            value=None,
+            progress=0.0,
+            output_dir=sweep_dir,
+        )
 
     _emit_event(
         event_callback,
@@ -287,7 +315,7 @@ def run_parameter_sweep(
                 summary.cancelled = True
                 break
 
-            _run_and_finalize(result, isolate_workspace=False)
+            _run_and_finalize(result, isolate_workspace=isolate_runs)
             if result.status == "failed" and not continue_on_error:
                 summary.stopped_on_error = True
                 break
@@ -324,6 +352,12 @@ def run_parameter_sweep(
             shutil.rmtree(cancelled_result.run_dir, ignore_errors=True)
             cancelled_result.atp_path = None
             cancelled_result.lis_path = None
+
+        if summary.processed_count == 0:
+            try:
+                plan_path.unlink()
+            except OSError:
+                pass
 
         try:
             sweep_dir.rmdir()
@@ -451,7 +485,29 @@ def _render_sweep_atp_lines(
             }
         ]
     }
-    return apply_parameter_overrides(original_lines, overrides)
+    rendered_lines = apply_parameter_overrides(original_lines, overrides)
+    rendered_field = rendered_lines[prepared_parameter.line_index][
+        prepared_parameter.start:prepared_parameter.end
+    ]
+    try:
+        rendered_value = float(
+            rendered_field.strip().replace("D", "E").replace("d", "e")
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"O valor {value:g} não pôde ser gravado no campo ATP."
+        ) from exc
+    if not math.isclose(
+        rendered_value,
+        float(value),
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"Validação do ATP parametrizado falhou: solicitado {value:g}, "
+            f"gravado {rendered_value:g}."
+        )
+    return rendered_lines
 
 
 def _write_rendered_atp_file(output_path: Path, rendered_lines: list[str]) -> Path:

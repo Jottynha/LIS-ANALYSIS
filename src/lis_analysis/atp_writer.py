@@ -60,12 +60,10 @@ def replace_value_in_line(line: str, start: int, end: int, new_value: float) -> 
         prefer_integer_with_dot=prefer_integer_with_dot,
     )
     if truncated:
-        logger.warning(
-            "Valor %.12g truncado para caber no campo [%s:%s] largura=%s",
-            float(new_value),
-            start,
-            end,
-            width,
+        raise ValueError(
+            f"O valor {float(new_value):.12g} não cabe no campo ATP "
+            f"[{start}:{end}] de largura {width}; a execução foi bloqueada "
+            "para evitar truncamento e resultados incorretos."
         )
 
     return line[:start] + formatted + line[end:]

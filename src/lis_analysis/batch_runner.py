@@ -174,6 +174,9 @@ def run_parameter_sweep(
         f"sweep_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
     )
     sweep_dir.mkdir(parents=True, exist_ok=False)
+    sweep_workspace_root = (
+        base_path.parent / ".lis_analysis_workspaces" / sweep_dir.name
+    )
 
     summary = SweepExecutionSummary(
         parameter=parameter_ref,
@@ -294,6 +297,7 @@ def run_parameter_sweep(
             event_callback=event_callback,
             cancel_event=cancel_event,
             isolate_workspace=isolate_workspace,
+            workspace_root=sweep_workspace_root,
             isolated_dependency_files=isolated_dependency_files,
         )
         _finalize_sweep_run(
@@ -327,6 +331,12 @@ def run_parameter_sweep(
             }
             for future in concurrent.futures.as_completed(future_map):
                 future.result()
+
+    shutil.rmtree(sweep_workspace_root, ignore_errors=True)
+    try:
+        sweep_workspace_root.parent.rmdir()
+    except OSError:
+        pass
 
     if cancel_event is not None and cancel_event.is_set():
         summary.cancelled = True
@@ -608,6 +618,7 @@ def _execute_sweep_run(
     event_callback: SweepEventCallback | None,
     cancel_event: Any | None,
     isolate_workspace: bool,
+    workspace_root: Path,
     isolated_dependency_files: tuple[tuple[Path, Path], ...],
 ) -> None:
     result.run_dir.mkdir(parents=True, exist_ok=True)
@@ -617,8 +628,13 @@ def _execute_sweep_run(
         result.error = "cancelled"
         return
 
+    execution_base_path = base_path
+    if isolate_workspace:
+        execution_base_path = (
+            workspace_root / f"run_{result.run_index:03d}" / base_path.name
+        )
     execution_atp_path = _build_execution_atp_path(
-        base_path if not isolate_workspace else (result.run_dir / "_solver_workspace" / base_path.name),
+        execution_base_path,
         result.run_index,
     )
     workspace_dir = execution_atp_path.parent if isolate_workspace else None

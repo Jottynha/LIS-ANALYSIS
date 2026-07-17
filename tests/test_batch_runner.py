@@ -309,7 +309,9 @@ class BatchRunnerExecutionTest(unittest.TestCase):
             def fake_solver(atp_file_path: str, **_kwargs) -> str:
                 atp_path = Path(atp_file_path)
                 observed_values.append(self._read_branch_resistance(atp_path))
-                isolated_workspaces.append("_solver_workspace" in atp_path.parts)
+                isolated_workspaces.append(
+                    ".lis_analysis_workspaces" in atp_path.parts
+                )
                 lis_path = atp_path.with_suffix(".lis")
                 lis_path.write_text("OK\n", encoding="latin-1")
                 return str(lis_path)

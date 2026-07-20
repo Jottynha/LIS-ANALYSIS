@@ -264,6 +264,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_lines_cache = []
         self._atp_param_rows = []
         self.atp_param_filter_var = tk.StringVar(value="")
+        self.atp_param_modified_only_var = tk.BooleanVar(value=False)
+        self.atp_param_filter_summary_var = tk.StringVar(value="")
         self.parameter_overrides = {}
         self._atp_section_collapsed = {"branch": False, "switch": False, "source": False}
         self._atp_section_widgets = {}
@@ -271,6 +273,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_filter_no_results_label = None
         self.atp_params_scroll_frame = None
         self._atp_expand_toggle_btn = None
+        self._atp_parameter_editor_dialog = None
+        self._atp_main_edit_button = None
         self._atp_params_expanded = False
         self._atp_params_collapsed_height = 260
         self._atp_params_expanded_height = 760
@@ -884,74 +888,44 @@ class ModernLisAnalysisApp(ctk.CTk):
             font=ctk.CTkFont(size=16, weight="bold")
         ).pack(side="left")
 
+        ctk.CTkLabel(
+            params_header,
+            textvariable=self.atp_param_status_var,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            params_card,
+            text="Abra o editor para localizar e alterar os parâmetros sem disputar a rolagem com a tela principal.",
+            justify="left",
+        ).pack(anchor="w", padx=15, pady=(0, 10))
+
         params_actions = ctk.CTkFrame(params_card, fg_color="transparent")
-        params_actions.pack(fill="x", padx=15, pady=(0, 6))
+        params_actions.pack(fill="x", padx=15, pady=(0, 15))
 
         ctk.CTkButton(
             params_actions,
-            text="Detectar parâmetros",
-            command=self._load_atp_parameters,
-            width=180
+            text="Detectar e editar parâmetros",
+            command=lambda: self._open_atp_parameter_editor(reload_parameters=True),
+            width=220,
         ).pack(side="left")
+
+        self._atp_main_edit_button = ctk.CTkButton(
+            params_actions,
+            text="Abrir editor de parâmetros",
+            command=self._open_atp_parameter_editor,
+            width=220,
+        )
+        self._atp_main_edit_button.pack(side="left", padx=(8, 0))
 
         ctk.CTkButton(
             params_actions,
             text="Baixar TXT",
             command=self._export_atp_parameters_txt,
-            width=150
+            width=150,
         ).pack(side="left", padx=(8, 0))
 
-        ctk.CTkButton(
-            params_actions,
-            text="Restaurar alterações",
-            command=self._reset_atp_parameter_changes,
-            width=170,
-            fg_color="#757575",
-            hover_color="#616161"
-        ).pack(side="left", padx=(8, 0))
-
-        self._atp_expand_toggle_btn = ctk.CTkButton(
-            params_actions,
-            text="Expandir",
-            width=120,
-            fg_color="#455A64",
-            hover_color="#37474F",
-            command=self._toggle_atp_params_expand,
-        )
-        self._atp_expand_toggle_btn.pack(side="left", padx=(8, 0))
-
-        ctk.CTkLabel(
-            params_actions,
-            textvariable=self.atp_param_status_var,
-            font=ctk.CTkFont(size=12, weight="bold")
-        ).pack(side="left", padx=10)
-
-        filter_row = ctk.CTkFrame(params_card, fg_color="transparent")
-        filter_row.pack(fill="x", padx=15, pady=(0, 8))
-
-        ctk.CTkLabel(filter_row, text="Buscar nó/parâmetro:").pack(side="left", padx=(0, 8))
-
-        filter_entry = ctk.CTkEntry(
-            filter_row,
-            width=320,
-            textvariable=self.atp_param_filter_var,
-            placeholder_text="Ex.: X0001A, resistência, linha...",
-        )
-        filter_entry.pack(side="left", fill="x", expand=True)
-
-        ctk.CTkButton(
-            filter_row,
-            text="Limpar",
-            width=90,
-            command=lambda: self.atp_param_filter_var.set(""),
-        ).pack(side="left", padx=(8, 0))
-
-        self.atp_param_filter_var.trace_add("write", lambda *_args: self._apply_atp_parameter_filter())
-
-        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(params_card, width=1060, height=260)
-        self.atp_params_scroll_frame.pack(fill="x", padx=15, pady=(0, 15))
-
-        self._setup_atp_params_scroll_isolation()
+        self._create_atp_parameter_editor_dialog()
 
         sweep_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         sweep_card.pack(fill="x", pady=(0, 15))
@@ -1319,6 +1293,117 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._atp_lines_cache = list(lines)
         return lines
 
+    def _create_atp_parameter_editor_dialog(self):
+        """Cria o editor modal de parâmetros ATP com uma única área de rolagem."""
+        dialog = ctk.CTkToplevel(self)
+        self._atp_parameter_editor_dialog = dialog
+        dialog.withdraw()
+        dialog.title("Editor de parâmetros ATP")
+        dialog.geometry("1180x780")
+        dialog.minsize(820, 560)
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(3, weight=1)
+
+        def close_dialog():
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.withdraw()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+
+        header = ctk.CTkFrame(dialog, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 8))
+        ctk.CTkLabel(
+            header,
+            text="Parâmetros editáveis do .atp",
+            font=ctk.CTkFont(size=19, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            header,
+            textvariable=self.atp_param_status_var,
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="right")
+
+        actions = ctk.CTkFrame(dialog, fg_color="transparent")
+        actions.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 8))
+        ctk.CTkButton(
+            actions,
+            text="Detectar parâmetros",
+            command=self._load_atp_parameters,
+            width=175,
+        ).pack(side="left")
+        ctk.CTkButton(
+            actions,
+            text="Baixar TXT",
+            command=self._export_atp_parameters_txt,
+            width=135,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            actions,
+            text="Restaurar alterações",
+            command=self._reset_atp_parameter_changes,
+            width=165,
+            fg_color="#757575",
+            hover_color="#616161",
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            actions,
+            text="Fechar",
+            command=close_dialog,
+            width=105,
+        ).pack(side="right")
+
+        filter_area = ctk.CTkFrame(dialog, fg_color="transparent")
+        filter_area.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 8))
+        filter_area.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(filter_area, text="Buscar nó/parâmetro:").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ctk.CTkEntry(
+            filter_area,
+            textvariable=self.atp_param_filter_var,
+            placeholder_text="Ex.: X0001A, resistência, linha...",
+        ).grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(
+            filter_area,
+            text="Limpar",
+            width=90,
+            command=lambda: self.atp_param_filter_var.set(""),
+        ).grid(row=0, column=2, padx=(8, 0))
+        ctk.CTkCheckBox(
+            filter_area,
+            text="Somente alterados",
+            variable=self.atp_param_modified_only_var,
+            command=self._apply_atp_parameter_filter,
+        ).grid(row=0, column=3, padx=(16, 0))
+        ctk.CTkLabel(
+            filter_area,
+            textvariable=self.atp_param_filter_summary_var,
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray70"),
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        self.atp_param_filter_var.trace_add(
+            "write", lambda *_args: self._apply_atp_parameter_filter()
+        )
+        self.atp_params_scroll_frame = ctk.CTkScrollableFrame(dialog, corner_radius=10)
+        self.atp_params_scroll_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self._setup_atp_params_scroll_isolation()
+
+    def _open_atp_parameter_editor(self, reload_parameters: bool = False):
+        """Exibe o editor modal e carrega os parâmetros quando necessário."""
+        if reload_parameters or not self._atp_param_rows:
+            self._load_atp_parameters(show_dialog_errors=True)
+
+        dialog = self._atp_parameter_editor_dialog
+        if dialog is None:
+            return
+        dialog.deiconify()
+        dialog.transient(self)
+        dialog.lift()
+        dialog.focus_force()
+        dialog.grab_set()
+
     def _clear_atp_parameter_editor(self):
         """Limpa a lista visual e caches de parâmetros ATP detectados."""
         for row in self._atp_param_rows:
@@ -1352,21 +1437,9 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._apply_atp_params_expand_state()
 
     def _apply_atp_params_expand_state(self):
-        """Aplica visualmente o estado expandido/reduzido do container de parâmetros ATP."""
-        if self.atp_params_scroll_frame is not None:
-            if self._atp_params_expanded:
-                target_height = max(self._atp_params_collapsed_height, int(self.winfo_height() * 0.72))
-            else:
-                target_height = self._atp_params_collapsed_height
-            try:
-                self.atp_params_scroll_frame.configure(height=target_height)
-            except Exception:
-                pass
-
-        if self._atp_expand_toggle_btn is not None:
-            self._atp_expand_toggle_btn.configure(
-                text="Reduzir" if self._atp_params_expanded else "Expandir"
-            )
+        """Mantém compatibilidade com versões anteriores do editor integrado."""
+        # O editor agora é modal e o seu único container ocupa toda a janela.
+        return
 
     def _setup_atp_params_scroll_isolation(self):
         """Isola o scroll da lista de parâmetros ATP para não mover o scroll da aba."""
@@ -1453,8 +1526,10 @@ class ModernLisAnalysisApp(ctk.CTk):
         if self.atp_params_scroll_frame is None:
             return
 
-        query = self.atp_param_filter_var.get().strip().lower()
+        query = self._normalize_search_text(self.atp_param_filter_var.get().strip())
+        only_modified = bool(self.atp_param_modified_only_var.get())
         total_visible_cards = 0
+        total_visible_rows = 0
 
         for section_key in self._atp_section_order:
             section_data = self._atp_section_widgets.get(section_key)
@@ -1464,10 +1539,19 @@ class ModernLisAnalysisApp(ctk.CTk):
             visible_cards = 0
             for card_data in section_data.get("cards", []):
                 widget = card_data["widget"]
-                should_show = (not query) or (query in card_data.get("search_text", ""))
+                card_rows = card_data.get("rows", [])
+                matches_search = (not query) or (
+                    query in self._normalize_search_text(card_data.get("search_text", ""))
+                )
+                has_modified_parameter = any(
+                    (int(row["line_index"]), str(row["parameter"])) in self.parameter_overrides
+                    for row in card_rows
+                )
+                should_show = matches_search and (not only_modified or has_modified_parameter)
 
                 if should_show:
                     visible_cards += 1
+                    total_visible_rows += len(card_rows)
                     if not card_data.get("visible", True):
                         widget.pack(fill="x", padx=10, pady=6)
                         card_data["visible"] = True
@@ -1485,13 +1569,21 @@ class ModernLisAnalysisApp(ctk.CTk):
                 if not section_data.get("section_visible", True):
                     section_frame.pack(fill="x", padx=4, pady=(6, 8))
                     section_data["section_visible"] = True
-                self._apply_atp_section_visibility(section_key)
+                if query or only_modified:
+                    body = section_data.get("body")
+                    toggle = section_data.get("toggle")
+                    if body is not None:
+                        body.pack(fill="x", padx=10, pady=(0, 8))
+                    if toggle is not None:
+                        toggle.configure(text="▾")
+                else:
+                    self._apply_atp_section_visibility(section_key)
             else:
                 if section_data.get("section_visible", True):
                     section_frame.pack_forget()
                     section_data["section_visible"] = False
 
-        if query and total_visible_cards == 0:
+        if (query or only_modified) and total_visible_cards == 0:
             if self._atp_filter_no_results_label is None:
                 self._atp_filter_no_results_label = ctk.CTkLabel(
                     self.atp_params_scroll_frame,
@@ -1502,6 +1594,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         else:
             if self._atp_filter_no_results_label is not None:
                 self._atp_filter_no_results_label.pack_forget()
+
+        total_rows = len(self._atp_param_rows)
+        if total_rows:
+            self.atp_param_filter_summary_var.set(
+                f"Exibindo {total_visible_cards} elemento(s) e {total_visible_rows} de {total_rows} parâmetro(s)"
+            )
+        else:
+            self.atp_param_filter_summary_var.set("")
 
     def _apply_atp_section_visibility(self, section_key: str):
         section_data = self._atp_section_widgets.get(section_key)
@@ -1655,6 +1755,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.parameter_overrides.pop(key, None)
             self._set_atp_row_visual_state(row, "invalid")
             self._refresh_atp_param_status()
+            self._apply_atp_parameter_filter()
             return
 
         normalized = raw.replace("D", "E").replace("d", "e")
@@ -1665,6 +1766,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self.parameter_overrides.pop(key, None)
             self._set_atp_row_visual_state(row, "invalid")
             self._refresh_atp_param_status()
+            self._apply_atp_parameter_filter()
             return
 
         row["invalid"] = False
@@ -1678,6 +1780,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             self._set_atp_row_visual_state(row, "normal")
 
         self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
 
     def _on_atp_entry_changed(self, row: dict):
         if row.get("_updating", False):
@@ -1716,6 +1819,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.parameter_overrides.pop(key, None)
         self._set_atp_row_visual_state(row, "normal")
         self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
 
     def _repeat_adjust_tick(self, row: dict):
         direction = int(row.get("_repeat_direction", 0))
@@ -1780,6 +1884,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
         self.parameter_overrides = {}
         self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
         self.log("[ATP] Alterações de parâmetros resetadas para valores originais")
 
     def _build_atp_overrides_preview_table(self, overrides: list[dict]) -> str:
@@ -1987,6 +2092,7 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                 inner_frame = ctk.CTkFrame(card, fg_color="transparent")
                 inner_frame.pack(fill="x", padx=10, pady=8)
+                card_rows = []
 
                 ctk.CTkLabel(
                     inner_frame,
@@ -2085,12 +2191,14 @@ class ModernLisAnalysisApp(ctk.CTk):
                     value_var.trace_add("write", lambda *_args, r=row_data: self._on_atp_entry_changed(r))
 
                     self._atp_param_rows.append(row_data)
+                    card_rows.append(row_data)
                     self._set_atp_row_visual_state(row_data, "normal")
 
                 self._atp_section_widgets[etype]["cards"].append(
                     {
                         "widget": card,
                         "search_text": " ".join(card_search_parts),
+                        "rows": card_rows,
                         "visible": True,
                     }
                 )

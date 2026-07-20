@@ -7,6 +7,7 @@ import sys
 import os
 import subprocess
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -278,7 +279,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self._sim_action_card = None
         self._simulation_scroll_frame = None
         self._atp_sweep_parameter_options = {}
-        self.atp_sweep_parameter_menu = None
+        self.atp_sweep_parameter_button = None
+        self._atp_sweep_parameter_dialog = None
         self.atp_sweep_run_button = None
         self.atp_cancel_button = None
         self._atp_scroll_isolation_bound = False
@@ -972,14 +974,13 @@ class ModernLisAnalysisApp(ctk.CTk):
         sweep_grid.grid_columnconfigure(3, weight=1)
 
         ctk.CTkLabel(sweep_grid, text="Parâmetro da execução em lote:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
-        self.atp_sweep_parameter_menu = ctk.CTkOptionMenu(
+        self.atp_sweep_parameter_button = ctk.CTkButton(
             sweep_grid,
-            values=["Nenhum parâmetro carregado"],
-            variable=self.atp_sweep_parameter_var,
-            command=self._on_atp_sweep_parameter_selected,
-            width=520,
+            text="Nenhum parâmetro carregado",
+            command=self._open_atp_sweep_parameter_dialog,
+            anchor="w",
         )
-        self.atp_sweep_parameter_menu.grid(row=0, column=1, columnspan=3, sticky="ew", pady=6)
+        self.atp_sweep_parameter_button.grid(row=0, column=1, columnspan=3, sticky="ew", pady=6)
 
         ctk.CTkLabel(sweep_grid, text="Início:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
         ctk.CTkEntry(sweep_grid, textvariable=self.atp_sweep_start_var, width=160).grid(row=1, column=1, sticky="ew", pady=6)
@@ -2174,12 +2175,12 @@ class ModernLisAnalysisApp(ctk.CTk):
         rows = [row for row in self._atp_param_rows if bool(row.get("editable", True))]
         self._atp_sweep_parameter_options = {}
 
-        if self.atp_sweep_parameter_menu is None:
+        if self.atp_sweep_parameter_button is None:
             return
 
         if not rows:
             placeholder = "Nenhum parâmetro carregado"
-            self.atp_sweep_parameter_menu.configure(values=[placeholder], state="disabled")
+            self.atp_sweep_parameter_button.configure(text=placeholder, state="disabled")
             self.atp_sweep_parameter_var.set(placeholder)
             return
 
@@ -2193,9 +2194,114 @@ class ModernLisAnalysisApp(ctk.CTk):
         if current not in self._atp_sweep_parameter_options:
             current = values[0]
 
-        self.atp_sweep_parameter_menu.configure(values=values, state="normal")
+        self.atp_sweep_parameter_button.configure(text=current, state="normal")
         self.atp_sweep_parameter_var.set(current)
         self._on_atp_sweep_parameter_selected(current)
+
+    @staticmethod
+    def _normalize_search_text(value: str) -> str:
+        """Normaliza texto para a pesquisa ignorar acentos e maiúsculas."""
+        return "".join(
+            character
+            for character in unicodedata.normalize("NFD", value.casefold())
+            if unicodedata.category(character) != "Mn"
+        )
+
+    def _open_atp_sweep_parameter_dialog(self):
+        if not self._atp_sweep_parameter_options:
+            return
+
+        existing_dialog = self._atp_sweep_parameter_dialog
+        if existing_dialog is not None and existing_dialog.winfo_exists():
+            existing_dialog.focus()
+            return
+
+        dialog = ctk.CTkToplevel(self)
+        self._atp_sweep_parameter_dialog = dialog
+        dialog.title("Selecionar parâmetro da execução em lote")
+        dialog.geometry("940x620")
+        dialog.minsize(700, 420)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(2, weight=1)
+
+        def close_dialog():
+            self._atp_sweep_parameter_dialog = None
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+
+        ctk.CTkLabel(
+            dialog,
+            text="Selecionar parâmetro para a execução em lote",
+            font=ctk.CTkFont(size=18, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=20, pady=(20, 8))
+
+        search_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        search_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        search_frame.grid_columnconfigure(0, weight=1)
+
+        search_var = tk.StringVar(value="")
+        search_entry = ctk.CTkEntry(
+            search_frame,
+            textvariable=search_var,
+            placeholder_text="Buscar por linha, nó, elemento ou parâmetro...",
+        )
+        search_entry.grid(row=0, column=0, sticky="ew")
+        ctk.CTkButton(
+            search_frame,
+            text="Limpar",
+            width=88,
+            command=lambda: search_var.set(""),
+        ).grid(row=0, column=1, padx=(8, 0))
+
+        results_count = ctk.CTkLabel(dialog, text="")
+        results_count.grid(row=3, column=0, sticky="w", padx=20, pady=(8, 0))
+
+        results_frame = ctk.CTkScrollableFrame(dialog, corner_radius=8)
+        results_frame.grid(row=2, column=0, sticky="nsew", padx=20)
+        results_frame.grid_columnconfigure(0, weight=1)
+
+        def select_parameter(label: str):
+            self.atp_sweep_parameter_var.set(label)
+            if self.atp_sweep_parameter_button is not None:
+                self.atp_sweep_parameter_button.configure(text=label)
+            self._on_atp_sweep_parameter_selected(label)
+            close_dialog()
+
+        def refresh_results(*_args):
+            query = self._normalize_search_text(search_var.get().strip())
+            for child in results_frame.winfo_children():
+                child.destroy()
+
+            matching_labels = [
+                label
+                for label in self._atp_sweep_parameter_options
+                if not query or query in self._normalize_search_text(label)
+            ]
+            results_count.configure(text=f"{len(matching_labels)} parâmetro(s) encontrado(s)")
+
+            if not matching_labels:
+                ctk.CTkLabel(results_frame, text="Nenhum parâmetro encontrado.").grid(
+                    row=0, column=0, sticky="w", padx=10, pady=10
+                )
+                return
+
+            for index, label in enumerate(matching_labels):
+                ctk.CTkButton(
+                    results_frame,
+                    text=label,
+                    anchor="w",
+                    fg_color="transparent",
+                    hover_color=("gray75", "gray28"),
+                    text_color=("gray10", "gray90"),
+                    command=lambda selected_label=label: select_parameter(selected_label),
+                ).grid(row=index, column=0, sticky="ew", padx=4, pady=2)
+
+        search_var.trace_add("write", refresh_results)
+        refresh_results()
+        search_entry.focus_set()
 
     def _on_atp_sweep_parameter_selected(self, _selected: str | None = None):
         row = self._atp_sweep_parameter_options.get(self.atp_sweep_parameter_var.get().strip())

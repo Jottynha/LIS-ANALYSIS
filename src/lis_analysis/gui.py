@@ -274,6 +274,8 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.atp_params_scroll_frame = None
         self._atp_expand_toggle_btn = None
         self._atp_parameter_editor_dialog = None
+        self._atp_parameter_editor_snapshot = {}
+        self._atp_parameter_editor_overrides_snapshot = {}
         self._atp_main_edit_button = None
         self._atp_params_expanded = False
         self._atp_params_collapsed_height = 260
@@ -1304,14 +1306,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         dialog.grid_columnconfigure(0, weight=1)
         dialog.grid_rowconfigure(3, weight=1)
 
-        def close_dialog():
-            try:
-                dialog.grab_release()
-            except Exception:
-                pass
-            dialog.withdraw()
-
-        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        dialog.protocol("WM_DELETE_WINDOW", self._request_close_atp_parameter_editor)
 
         header = ctk.CTkFrame(dialog, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 8))
@@ -1350,10 +1345,20 @@ class ModernLisAnalysisApp(ctk.CTk):
         ).pack(side="left", padx=(8, 0))
         ctk.CTkButton(
             actions,
-            text="Fechar",
-            command=close_dialog,
-            width=105,
+            text="Salvar alterações",
+            command=self._save_atp_parameter_editor_changes,
+            width=155,
+            fg_color="#15803D",
+            hover_color="#166534",
         ).pack(side="right")
+        ctk.CTkButton(
+            actions,
+            text="Fechar",
+            command=self._request_close_atp_parameter_editor,
+            width=105,
+            fg_color="#616161",
+            hover_color="#4B4B4B",
+        ).pack(side="right", padx=(0, 8))
 
         filter_area = ctk.CTkFrame(dialog, fg_color="transparent")
         filter_area.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 8))
@@ -1403,6 +1408,95 @@ class ModernLisAnalysisApp(ctk.CTk):
         dialog.lift()
         dialog.focus_force()
         dialog.grab_set()
+        self._capture_atp_parameter_editor_snapshot()
+
+    def _capture_atp_parameter_editor_snapshot(self):
+        """Guarda o estado confirmado para permitir descartar edições do modal."""
+        self._atp_parameter_editor_snapshot = {
+            (int(row["line_index"]), str(row["parameter"])): row["var"].get()
+            for row in self._atp_param_rows
+        }
+        self._atp_parameter_editor_overrides_snapshot = dict(self.parameter_overrides)
+
+    def _atp_parameter_editor_has_unsaved_changes(self) -> bool:
+        current = {
+            (int(row["line_index"]), str(row["parameter"])): row["var"].get()
+            for row in self._atp_param_rows
+        }
+        return current != self._atp_parameter_editor_snapshot
+
+    def _hide_atp_parameter_editor(self):
+        dialog = self._atp_parameter_editor_dialog
+        if dialog is None:
+            return
+        try:
+            dialog.grab_release()
+        except Exception:
+            pass
+        dialog.withdraw()
+
+    def _restore_atp_parameter_editor_snapshot(self):
+        """Descarta somente o que foi editado desde a última abertura ou salvamento."""
+        snapshot = self._atp_parameter_editor_snapshot
+        for row in self._atp_param_rows:
+            key = (int(row["line_index"]), str(row["parameter"]))
+            if key not in snapshot:
+                continue
+            row["_updating"] = True
+            row["var"].set(snapshot[key])
+            row["_updating"] = False
+            self._update_atp_parameter_row(row, source="restore")
+
+        self.parameter_overrides = dict(self._atp_parameter_editor_overrides_snapshot)
+        self._refresh_atp_param_status()
+        self._apply_atp_parameter_filter()
+
+    def _save_atp_parameter_editor_changes(self) -> bool:
+        """Valida, confirma as edições atuais e fecha o editor."""
+        try:
+            self._collect_atp_parameter_overrides()
+        except Exception as exc:
+            self._show_error(
+                "Valores inválidos",
+                "Corrija os valores inválidos antes de salvar as alterações.",
+                details=[("Detalhes", str(exc))],
+            )
+            return False
+
+        self._capture_atp_parameter_editor_snapshot()
+        self._refresh_atp_param_status()
+        self.log(
+            f"[ATP] Alterações salvas no editor: {len(self.parameter_overrides)} parâmetro(s) alterado(s)"
+        )
+        self._hide_atp_parameter_editor()
+        return True
+
+    def _request_close_atp_parameter_editor(self):
+        """Confirma o destino das alterações não salvas antes de fechar o modal."""
+        if not self._atp_parameter_editor_has_unsaved_changes():
+            self._hide_atp_parameter_editor()
+            return
+
+        dialog = self._atp_parameter_editor_dialog
+        decision = messagebox.askyesnocancel(
+            "Alterações não salvas",
+            (
+                "Existem alterações que ainda não foram salvas.\n\n"
+                "Sim: salvar e fechar.\n"
+                "Não: descartar e fechar.\n"
+                "Cancelar: continuar editando."
+            ),
+            icon="warning",
+            parent=dialog,
+        )
+        if decision is None:
+            return
+        if decision:
+            self._save_atp_parameter_editor_changes()
+            return
+
+        self._restore_atp_parameter_editor_snapshot()
+        self._hide_atp_parameter_editor()
 
     def _clear_atp_parameter_editor(self):
         """Limpa a lista visual e caches de parâmetros ATP detectados."""

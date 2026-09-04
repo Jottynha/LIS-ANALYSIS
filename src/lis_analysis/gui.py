@@ -131,6 +131,20 @@ def _ensure_plot_imports():
                 matplotlib.use("Agg")
 
             import matplotlib.pyplot as _plt
+
+            # Escala tipográfica dos gráficos.
+            # Mantém uma única configuração para todos os gráficos gerados pela GUI.
+            _PLOT_FONT_SCALE = 2.0
+            matplotlib.rcParams.update({
+                "font.size": 10 * _PLOT_FONT_SCALE,
+                "axes.labelsize": 10 * _PLOT_FONT_SCALE,
+                "axes.titlesize": 12 * _PLOT_FONT_SCALE,
+                "xtick.labelsize": 10 * _PLOT_FONT_SCALE,
+                "ytick.labelsize": 10 * _PLOT_FONT_SCALE,
+                "legend.fontsize": 10 * _PLOT_FONT_SCALE,
+                "figure.titlesize": 12 * _PLOT_FONT_SCALE,
+            })
+
             plt = _plt
 
 
@@ -1091,8 +1105,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             lines.extend(
                 [
                     f"[{index}] {record['label']}",
-                    f"Probabilidade de falha: {risk * 100.0:.8g}%",
-                    f"R: {risk:.10e}",
+                    f"Risco de Falha: {risk:.10e}",
                     f"CFO corrigido: {float(record['corrected_cfo_kv']):.4f} kV",
                     f"Índice normalizado Z: {float(record['z_score']):.6f}",
                     f"Sobretensão média: {float(record['mean_overvoltage_kv']):.4f} kV",
@@ -4265,6 +4278,9 @@ class ModernLisAnalysisApp(ctk.CTk):
             
             ax.set_xlabel('Tensão (pu)')
             ax.set_ylabel('Frequência')
+            ax.tick_params(axis='both', labelsize=20)
+            if ax2 is not None:
+                ax2.tick_params(axis='y', labelsize=20)
             ax.grid(alpha=0.25)
             ax.legend(loc='upper left')
             
@@ -4316,7 +4332,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     )
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
                     stats_y = 0.74 if risk_result is not None else 0.95
-                    ax.text(0.98, stats_y, stats_text, transform=ax.transAxes, fontsize=9,
+                    ax.text(0.98, stats_y, stats_text, transform=ax.transAxes, fontsize=18,
                             verticalalignment='top', horizontalalignment='right', bbox=bbox_props)
                 except Exception:
                     pass
@@ -4339,13 +4355,12 @@ class ModernLisAnalysisApp(ctk.CTk):
                     0.98,
                     0.96,
                     (
-                        f"Risco de falha: {risk_result.risk * 100.0:.6g}%\n"
-                        f"R = {risk_result.risk:.3e}"
+                        f"Risco de Falha = {risk_result.risk:.3e}"
                     ),
                     transform=ax.transAxes,
                     ha="right",
                     va="top",
-                    fontsize=9,
+                    fontsize=18,
                     fontweight="bold",
                     color="#444444",
                     zorder=20,
@@ -4400,7 +4415,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             ax2 = None
             if plot_options.get('show_cumulative', True):
                 ax2 = ax.twinx()
-                ax2.set_ylabel('Acumulado (%)', fontsize=12, fontweight='bold')
+                ax2.set_ylabel('Acumulado (%)', fontsize=24, fontweight='bold')
                 ax2.set_ylim(0, 100)
             
             for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
@@ -4446,18 +4461,21 @@ class ModernLisAnalysisApp(ctk.CTk):
                     ax2.plot(x, cum_pct, color=color, marker='d', linestyle=':', 
                             label=f"{label} (acum.)", markersize=3, linewidth=1.5, alpha=0.7)
             
-            ax.set_xlabel('Tensão (pu)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('Frequência', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Tensão (pu)', fontsize=24, fontweight='bold')
+            ax.set_ylabel('Frequência', fontsize=24, fontweight='bold')
+            ax.tick_params(axis='both', labelsize=20)
+            if ax2 is not None:
+                ax2.tick_params(axis='y', labelsize=20)
             ax.grid(alpha=0.3, linestyle='--')
-            ax.set_title('Gráfico Comparativo - Distribuição e Ajuste Gaussiano', fontsize=14, fontweight='bold', pad=15)
+            ax.set_title('Gráfico Comparativo - Distribuição e Ajuste Gaussiano', fontsize=28, fontweight='bold', pad=15)
             
             # Combinar legendas dos dois eixos
             if ax2:
                 lines1, labels1 = ax.get_legend_handles_labels()
                 lines2, labels2 = ax2.get_legend_handles_labels()
-                ax.legend(lines1 + lines2, labels1 + labels2, ncol=2, fontsize=8, loc='best', framealpha=0.95)
+                ax.legend(lines1 + lines2, labels1 + labels2, ncol=2, fontsize=16, loc='best', framealpha=0.95)
             else:
-                ax.legend(ncol=2, fontsize=9, loc='best', framealpha=0.9)
+                ax.legend(ncol=2, fontsize=18, loc='best', framealpha=0.9)
             
             # Caixa de estatisticas resumida.
             if plot_options.get('show_stats_box', True):
@@ -4478,7 +4496,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
                 
                 bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=8,
+                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=16,
                        verticalalignment='top', horizontalalignment='left', 
                        bbox=bbox_props, family='monospace')
             
@@ -4524,3 +4542,4 @@ if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "data" / "samples" / "ACP"
     outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd() / "Simulation_Result"
     launch_gui(folder, outdir)
+

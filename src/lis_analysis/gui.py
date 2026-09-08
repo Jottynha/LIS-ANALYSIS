@@ -42,6 +42,7 @@ PREFS_FILE = Path.home() / ".lis_analysis_gui.json"
 
 parse_lis_table = None
 parse_lis_once = None
+parse_lis_output_variables = None
 save_df_to_excel_only = None
 calcular_estatisticas_do_df = None
 escrever_estatisticas_excel = None
@@ -63,6 +64,7 @@ def _ensure_pipeline_imports():
     global _pipeline_imported
     global parse_lis_table
     global parse_lis_once
+    global parse_lis_output_variables
     global save_df_to_excel_only
     global calcular_estatisticas_do_df
     global escrever_estatisticas_excel
@@ -88,6 +90,7 @@ def _ensure_pipeline_imports():
         from .main import (
             parse_lis_table as _parse_lis_table,
             parse_lis_once as _parse_lis_once,
+            parse_lis_output_variables as _parse_lis_output_variables,
             save_df_to_excel_only as _save_df_to_excel_only,
             calcular_estatisticas_do_df as _calcular_estatisticas_do_df,
             escrever_estatisticas_excel as _escrever_estatisticas_excel,
@@ -100,6 +103,7 @@ def _ensure_pipeline_imports():
 
         parse_lis_table = _parse_lis_table
         parse_lis_once = _parse_lis_once
+        parse_lis_output_variables = _parse_lis_output_variables
         save_df_to_excel_only = _save_df_to_excel_only
         calcular_estatisticas_do_df = _calcular_estatisticas_do_df
         escrever_estatisticas_excel = _escrever_estatisticas_excel
@@ -245,6 +249,14 @@ class ModernLisAnalysisApp(ctk.CTk):
         self.hide_errors_var = tk.BooleanVar(value=False)
         self.parallel_process_var = tk.BooleanVar(value=False)
 
+        # Seleção das variáveis das séries temporais que serão plotadas.
+        # A lista é preenchida automaticamente a partir dos arquivos .lis da pasta.
+        self.time_series_variable_vars = {}
+        self.time_series_selected_variables = []
+        self.time_series_selection_initialized = False
+        self.time_series_variables_frame = None
+        self.time_series_variables_status_var = tk.StringVar(value="Nenhuma variável carregada")
+
         # Estado da execucao ATP
         self._atp_running = False
         self._atp_started_at = None
@@ -371,6 +383,9 @@ class ModernLisAnalysisApp(ctk.CTk):
                 self.save_logs_var.set(data.get('save_logs', True))
                 self.hide_errors_var.set(data.get('hide_errors', False))
                 self.parallel_process_var.set(data.get('parallel_process', False))
+                if 'time_series_selected_variables' in data:
+                    self.time_series_selected_variables = list(data.get('time_series_selected_variables', []))
+                    self.time_series_selection_initialized = True
                 self.atp_file_var.set(data.get('atp_file', ''))
                 self.atp_executable_var.set(data.get('atp_executable', ''))
                 self.enable_risk_var.set(data.get('enable_failure_risk', False))
@@ -415,6 +430,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                 'save_logs': self.save_logs_var.get(),
                 'hide_errors': self.hide_errors_var.get(),
                 'parallel_process': self.parallel_process_var.get(),
+                'time_series_selected_variables': list(self.time_series_selected_variables),
                 'atp_file': self.atp_file_var.get(),
                 'atp_executable': self.atp_executable_var.get(),
                 'enable_failure_risk': self.enable_risk_var.get(),
@@ -622,6 +638,57 @@ class ModernLisAnalysisApp(ctk.CTk):
         ctk.CTkCheckBox(plot_col2, text="Curva acumulada (%)", variable=self.plot_cumulative_var).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(plot_col2, text="Caixa de estatísticas", variable=self.plot_stats_box_var).pack(anchor="w", pady=5)
         
+        # Card: Seleção das variáveis das séries temporais
+        ts_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
+        ts_card.pack(fill="x", pady=(0, 15))
+
+        ts_header = ctk.CTkFrame(ts_card, fg_color="transparent")
+        ts_header.pack(fill="x", padx=15, pady=(15, 8))
+
+        ctk.CTkLabel(
+            ts_header,
+            text="Variáveis das Séries Temporais",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            ts_header, text="Atualizar variáveis", width=150, height=30,
+            command=self._refresh_time_series_variables
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            ts_card,
+            text=(
+                "Escolha quais variáveis serão desenhadas nos gráficos de séries temporais. "
+                "A seleção não remove as variáveis da aba de séries temporais do Excel."
+            ),
+            font=ctk.CTkFont(size=11), justify="left", anchor="w"
+        ).pack(fill="x", padx=15, pady=(0, 8))
+
+        ts_actions = ctk.CTkFrame(ts_card, fg_color="transparent")
+        ts_actions.pack(fill="x", padx=15, pady=(0, 6))
+        ctk.CTkButton(
+            ts_actions, text="Selecionar todas", width=125, height=28,
+            command=self._select_all_time_series_variables
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            ts_actions, text="Limpar seleção", width=125, height=28,
+            fg_color="gray", hover_color="gray35",
+            command=self._clear_time_series_variables
+        ).pack(side="left")
+        ctk.CTkLabel(
+            ts_actions, textvariable=self.time_series_variables_status_var,
+            font=ctk.CTkFont(size=11)
+        ).pack(side="right")
+
+        self.time_series_variables_frame = ctk.CTkScrollableFrame(
+            ts_card, height=170, corner_radius=8
+        )
+        self.time_series_variables_frame.pack(fill="x", padx=15, pady=(0, 15))
+
+        # Carrega a lista inicialmente (se a pasta já estiver definida).
+        self.after(100, self._refresh_time_series_variables)
+
         # Card: calculo do risco de falha conforme a subsecao 3.2 do artigo.
         risk_card = ctk.CTkFrame(scroll_frame, corner_radius=10)
         risk_card.pack(fill="x", pady=(0, 15))
@@ -1199,6 +1266,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         if folder:
             self.folder_var.set(folder)
             self.refresh_list()
+            self._refresh_time_series_variables()
             self._save_prefs()
     
     def _choose_outdir(self):
@@ -2078,6 +2146,27 @@ class ModernLisAnalysisApp(ctk.CTk):
         pos_x = parent_x + (parent_w - width) // 2
         pos_y = parent_y + (parent_h - height) // 2
         dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+
+        # O grab_set() não pode ser chamado enquanto a janela ainda não está
+        # mapeada/visível. Em alguns ambientes (principalmente Linux/X11),
+        # chamar grab_set() logo após CTkToplevel() gera:
+        # _tkinter.TclError: grab failed: window not viewable
+        #
+        # Primeiro deixamos o Tk tornar a janela visível e só então
+        # transformamos o diálogo em modal.
+        try:
+            dialog.wait_visibility()
+            dialog.grab_set()
+        except tk.TclError:
+            # Se a janela tiver sido fechada/destruída durante a criação,
+            # não deixamos a aplicação inteira quebrar.
+            try:
+                if dialog.winfo_exists():
+                    dialog.destroy()
+            except Exception:
+                pass
+            return
+
         dialog.lift()
         dialog.focus_force()
         self.wait_window(dialog)
@@ -2609,6 +2698,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                     series_path,
                     lis_name=lis_path.name,
                     mostrar=False,
+                    selected_variables=list(self.time_series_selected_variables),
                 )
         except Exception as exc:
             if not hide_errors and report_progress is not None:
@@ -3217,7 +3307,6 @@ class ModernLisAnalysisApp(ctk.CTk):
         dialog.title(title)
         dialog.transient(self)
         dialog.resizable(False, False)
-        dialog.grab_set()
 
         container = ctk.CTkFrame(dialog, corner_radius=12)
         container.pack(fill="both", expand=True, padx=14, pady=14)
@@ -3356,6 +3445,21 @@ class ModernLisAnalysisApp(ctk.CTk):
         pos_x = parent_x + (parent_w - width) // 2
         pos_y = parent_y + (parent_h - height) // 2
         dialog.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+
+        # Em alguns ambientes Linux/X11, grab_set() chamado imediatamente
+        # após CTkToplevel() pode ocorrer antes de a janela estar mapeada,
+        # causando: "grab failed: window not viewable".
+        try:
+            dialog.wait_visibility()
+            dialog.grab_set()
+        except tk.TclError:
+            try:
+                if dialog.winfo_exists():
+                    dialog.destroy()
+            except Exception:
+                pass
+            return
+
         dialog.lift()
         dialog.focus_force()
         self.wait_window(dialog)
@@ -3650,6 +3754,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                             series_path,
                             lis_name=lis_target.name,
                             mostrar=False,
+                            selected_variables=list(self.time_series_selected_variables),
                         )
                         if show_plots and series_path.exists():
                             self._run_on_ui_thread(
@@ -3923,7 +4028,108 @@ class ModernLisAnalysisApp(ctk.CTk):
         
         for file_path in files:
             self._create_file_card(file_path)
+
+        # Depois de recriar os checkboxes, a lista de variáveis passa a refletir
+        # os .lis atualmente selecionáveis nesta pasta.
+        self._refresh_time_series_variables()
     
+    def _on_lis_selection_changed(self):
+        """Atualiza a lista de variáveis conforme os arquivos .lis selecionados."""
+        self._refresh_time_series_variables()
+
+    def _refresh_time_series_variables(self):
+        """Detecta as variáveis de séries temporais disponíveis na pasta de entrada."""
+        if self.time_series_variables_frame is None:
+            return
+
+        folder = Path(self.folder_var.get())
+        if not folder.exists():
+            self.time_series_variables_status_var.set("Pasta de entrada não encontrada")
+            return
+
+        try:
+            _ensure_pipeline_imports()
+            files = _scan_lis(folder)
+
+            selected_paths = {
+                Path(file_str)
+                for file_str, var in self.file_selection_vars.items()
+                if var.get()
+            }
+            if selected_paths:
+                files = [path for path in files if path in selected_paths]
+
+            variables = []
+            seen = set()
+            for lis_path in files:
+                try:
+                    for var in parse_lis_output_variables(lis_path):
+                        if var not in seen:
+                            seen.add(var)
+                            variables.append(var)
+                except Exception as exc:
+                    self.log(f"Não foi possível ler variáveis de {lis_path.name}: {exc}")
+
+            for widget in self.time_series_variables_frame.winfo_children():
+                widget.destroy()
+            self.time_series_variable_vars.clear()
+
+            if not variables:
+                self.time_series_variables_status_var.set("Nenhuma variável encontrada")
+                return
+
+            previous = set(self.time_series_selected_variables)
+            # Na primeira utilização, todas ficam selecionadas. Depois disso,
+            # uma seleção vazia continua sendo uma seleção válida.
+            selected = previous if self.time_series_selection_initialized else set(variables)
+            # Remove da seleção itens que não existem mais. Uma seleção vazia
+            # é válida e deve permanecer vazia quando o usuário limpar a seleção.
+            selected &= set(variables)
+
+            for idx, var_name in enumerate(variables):
+                var = tk.BooleanVar(value=var_name in selected)
+                self.time_series_variable_vars[var_name] = var
+                ctk.CTkCheckBox(
+                    self.time_series_variables_frame,
+                    text=var_name, variable=var,
+                    command=self._update_time_series_selection
+                ).grid(row=idx // 4, column=idx % 4, sticky="w", padx=10, pady=5)
+
+            for col in range(4):
+                self.time_series_variables_frame.grid_columnconfigure(col, weight=1)
+
+            self.time_series_selection_initialized = True
+            self._update_time_series_selection(save=False)
+            self.time_series_variables_status_var.set(
+                f"{len(selected)} de {len(variables)} variável(is) selecionada(s)"
+            )
+        except Exception as exc:
+            self.time_series_variables_status_var.set("Erro ao carregar variáveis")
+            self.log(f"Erro ao carregar variáveis das séries temporais: {exc}")
+
+    def _update_time_series_selection(self, save=True):
+        """Atualiza a seleção global usada pelos gráficos de séries temporais."""
+        self.time_series_selected_variables = [
+            name for name, var in self.time_series_variable_vars.items() if var.get()
+        ]
+        total = len(self.time_series_variable_vars)
+        self.time_series_variables_status_var.set(
+            f"{len(self.time_series_selected_variables)} de {total} variável(is) selecionada(s)"
+            if total else "Nenhuma variável encontrada"
+        )
+        if save:
+            self._save_prefs()
+
+    def _select_all_time_series_variables(self):
+        for var in self.time_series_variable_vars.values():
+            var.set(True)
+        self._update_time_series_selection()
+
+    def _clear_time_series_variables(self):
+        for var in self.time_series_variable_vars.values():
+            var.set(False)
+        self._update_time_series_selection()
+
     def _create_file_card(self, file_path: Path):
         """Cria um card para representar um arquivo .lis"""
         # Card principal
@@ -3942,7 +4148,8 @@ class ModernLisAnalysisApp(ctk.CTk):
             content_frame,
             text="",
             variable=var,
-            width=20
+            width=20,
+            command=self._on_lis_selection_changed,
         )
         checkbox.pack(side="left", padx=(0, 10))
         
@@ -4047,6 +4254,7 @@ class ModernLisAnalysisApp(ctk.CTk):
         hide_errors = self.hide_errors_var.get()
         save_logs = self.save_logs_var.get()
         open_output = self.open_output_var.get()
+        selected_time_series_variables = list(self.time_series_selected_variables)
 
         self.log(f"Iniciando processamento de {len(selected_files)} arquivo(s)...")
         self._set_status(f"Processando {len(selected_files)} arquivo(s)...")
@@ -4075,7 +4283,11 @@ class ModernLisAnalysisApp(ctk.CTk):
                     self._set_status(f"Processando {lis_path.name}... ({idx}/{total})")
                     self.log(f"Processando: {lis_path.name}")
 
-                    parsed = parse_lis_once(lis_path, verbose=False)
+                    parsed = parse_lis_once(
+                        lis_path,
+                        selected_variables=selected_time_series_variables,
+                        verbose=False,
+                    )
                     df, summary = parsed.table_df, parsed.summary
                     if df is None:
                         self.log(f"Tabela não encontrada em: {lis_path.name}")
@@ -4146,6 +4358,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                                 series_path,
                                 lis_name=lis_path.name,
                                 mostrar=False,
+                                selected_variables=selected_time_series_variables,
                             )
                             if show_plots and series_path.exists():
                                 self._run_on_ui_thread(
@@ -4247,6 +4460,11 @@ class ModernLisAnalysisApp(ctk.CTk):
             
             # Criar figura
             fig, ax = plt.subplots(figsize=(11, 7))
+            # Inicializar o eixo secundário antes de qualquer referência a ele.
+            # Em algumas configurações, o eixo acumulado só é criado quando
+            # `show_cumulative` está habilitado.
+            ax2 = None
+
             # Barras de frequência
             if plot_options.get('show_bars', True):
                 unique_x = np.unique(x)
@@ -4285,7 +4503,6 @@ class ModernLisAnalysisApp(ctk.CTk):
             ax.legend(loc='upper left')
             
             # Curva acumulada
-            ax2 = None
             if plot_options.get('show_cumulative', True):
                 ax2 = ax.twinx()
                 total_weight = np.sum(y)
@@ -4387,14 +4604,14 @@ class ModernLisAnalysisApp(ctk.CTk):
             traceback.print_exc()
     
     def _criar_grafico_comparativo_customizado(self, excel_paths: list, outdir: Path, output_name: str, plot_options: dict, mostrar: bool = False):
-        """Cria gráfico comparativo com opções customizadas"""
+        """Cria gráfico comparativo com uma legenda compacta por arquivo."""
         try:
             _ensure_pipeline_imports()
             _ensure_plot_imports()
-            
+
             series_data = []
             labels = []
-            
+
             for excel_path in excel_paths:
                 res = obter_xy_e_stats_de_excel(excel_path)
                 if res is None:
@@ -4402,26 +4619,27 @@ class ModernLisAnalysisApp(ctk.CTk):
                 x, y, mu, sigma = res
                 series_data.append((x, y, mu, sigma))
                 labels.append(excel_path.stem)
-            
+
             if not series_data:
                 self.log("Sem dados para gráfico comparativo")
                 return
-            
-            # Criar figura
-            fig, ax = plt.subplots(figsize=(14, 8))
+
+            fig, ax = plt.subplots(figsize=(12, 7))
             colors = plt.cm.tab10(range(len(series_data)))
-            
-            # Preparar eixo secundário se curva acumulada estiver habilitada
+            legend_handles = []
+            from matplotlib.lines import Line2D
+
             ax2 = None
             if plot_options.get('show_cumulative', True):
                 ax2 = ax.twinx()
-                ax2.set_ylabel('Acumulado (%)', fontsize=24, fontweight='bold')
+                ax2.set_ylabel('Acumulado (%)', fontsize=18, fontweight='bold')
                 ax2.set_ylim(0, 100)
-            
+
             for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
                 color = colors[idx]
-                
-                # Barras (histograma) - com transparência para não sobrepor muito
+                # Somente uma entrada de legenda por arquivo.
+                legend_handles.append(Line2D([0], [0], color=color, linewidth=2.2, label=label))
+
                 if plot_options.get('show_bars', True):
                     unique_x = np.unique(x)
                     if unique_x.size > 1:
@@ -4430,95 +4648,127 @@ class ModernLisAnalysisApp(ctk.CTk):
                         bin_width = float(np.median(diffs_pos)) if diffs_pos.size > 0 else (np.max(x) - np.min(x)) / max(1, len(unique_x))
                     else:
                         bin_width = 0.1
-                    bar_width = bin_width * 0.7  # Mais estreito no comparativo
-                    # Offset para não sobrepor barras de diferentes séries
-                    offset = (idx - len(series_data)/2) * bar_width * 0.3
-                    ax.bar(x + offset, y, width=bar_width*0.8, alpha=0.25, color=color, 
-                           label=f"{label} (barras)", align='center', edgecolor=color, linewidth=0.5)
-                
-                # Pontos
+                    bar_width = bin_width * 0.7
+                    offset = (idx - len(series_data) / 2) * bar_width * 0.3
+                    ax.bar(
+                        x + offset, y, width=bar_width * 0.8, alpha=0.25,
+                        color=color, label='_nolegend_', align='center',
+                        edgecolor=color, linewidth=0.5,
+                    )
+
                 if plot_options.get('show_points', True):
-                    ax.scatter(x, y, s=25, alpha=0.6, color=color, label=f"{label} (pontos)", marker='o', edgecolors='white', linewidths=0.5)
-                
-                # Curva gaussiana - estendida para mostrar curva completa
+                    ax.scatter(
+                        x, y, s=20, alpha=0.6, color=color,
+                        label='_nolegend_', marker='o', edgecolors='white',
+                        linewidths=0.5,
+                    )
+
                 if plot_options.get('show_gaussian', True) and sigma and np.isfinite(sigma) and sigma > 0:
-                    # Estender para ±3σ do centro (ou além dos dados se for maior)
-                    x_min_gauss = min(np.min(x), mu - 3*sigma)
-                    x_max_gauss = max(np.max(x), mu + 3*sigma)
-                    # Adicionar margem extra de 10%
+                    x_min_gauss = min(np.min(x), mu - 3 * sigma)
+                    x_max_gauss = max(np.max(x), mu + 3 * sigma)
                     margin = (x_max_gauss - x_min_gauss) * 0.1
                     x_smooth = np.linspace(x_min_gauss - margin, x_max_gauss + margin, 1000)
-                    pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma)**2) / (sigma * np.sqrt(2 * np.pi))
+                    pdf = np.exp(-0.5 * ((x_smooth - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
                     scale_factor = (np.max(y) / np.max(pdf)) if np.max(pdf) > 0 else 1.0
                     y_smooth = pdf * scale_factor
-                    ax.plot(x_smooth, y_smooth, linewidth=2.5, color=color, label=f"{label} (gaussiana)", linestyle='-', alpha=0.9)
-                
-                # Curva acumulada
-                if plot_options.get('show_cumulative', True) and ax2:
+                    ax.plot(
+                        x_smooth, y_smooth, linewidth=2.2, color=color,
+                        label='_nolegend_', linestyle='-', alpha=0.9,
+                    )
+
+                if plot_options.get('show_cumulative', True) and ax2 is not None:
                     total_weight = np.sum(y)
-                    cumsum = np.cumsum(y)
-                    cum_pct = (cumsum / total_weight) * 100.0
-                    ax2.plot(x, cum_pct, color=color, marker='d', linestyle=':', 
-                            label=f"{label} (acum.)", markersize=3, linewidth=1.5, alpha=0.7)
-            
-            ax.set_xlabel('Tensão (pu)', fontsize=24, fontweight='bold')
-            ax.set_ylabel('Frequência', fontsize=24, fontweight='bold')
-            ax.tick_params(axis='both', labelsize=20)
+                    if total_weight > 0:
+                        cumsum = np.cumsum(y)
+                        cum_pct = (cumsum / total_weight) * 100.0
+                        ax2.plot(
+                            x, cum_pct, color=color, marker='d', linestyle=':',
+                            label='_nolegend_', markersize=3, linewidth=1.4, alpha=0.7,
+                        )
+
+            ax.set_xlabel('Tensão (pu)', fontsize=18, fontweight='bold')
+            ax.set_ylabel('Frequência', fontsize=18, fontweight='bold')
+            ax.tick_params(axis='both', labelsize=14)
             if ax2 is not None:
-                ax2.tick_params(axis='y', labelsize=20)
+                ax2.tick_params(axis='y', labelsize=14)
             ax.grid(alpha=0.3, linestyle='--')
-            ax.set_title('Gráfico Comparativo - Distribuição e Ajuste Gaussiano', fontsize=28, fontweight='bold', pad=15)
-            
-            # Combinar legendas dos dois eixos
-            if ax2:
-                lines1, labels1 = ax.get_legend_handles_labels()
-                lines2, labels2 = ax2.get_legend_handles_labels()
-                ax.legend(lines1 + lines2, labels1 + labels2, ncol=2, fontsize=16, loc='best', framealpha=0.95)
-            else:
-                ax.legend(ncol=2, fontsize=18, loc='best', framealpha=0.9)
-            
-            # Caixa de estatisticas resumida.
+            ax.set_title(
+                'Gráfico Comparativo - Distribuição e Ajuste Gaussiano',
+                fontsize=21, fontweight='bold', pad=24,
+            )
+
+            if legend_handles:
+                # Legenda compacta: usa apenas a parte diferente de cada nome de arquivo.
+                # Assim evita a repetição do prefixo comum e impede que a legenda
+                # fique estourada horizontalmente.
+                common_prefix = os.path.commonprefix(labels).rstrip(" _-.") if labels else ""
+                compact_labels = []
+                for label in labels:
+                    short = label[len(common_prefix):].lstrip(" _-.") if common_prefix else label
+                    if not short:
+                        short = label
+                    # Melhora a leitura de nomes como "SemControle".
+                    short = re.sub(r"(?<=[a-záéíóúãõâêôç])(?=[A-ZÁÉÍÓÚÃÕÂÊÔÇ])", " ", short)
+                    short = short.replace("_", " ").strip()
+                    compact_labels.append(short)
+
+                legend_handles = [
+                    Line2D([0], [0], color=handle.get_color(), linewidth=2.0,
+                           label=short_label)
+                    for handle, short_label in zip(legend_handles, compact_labels)
+                ]
+
+                ncols = 2 if len(legend_handles) > 1 else 1
+                ax.legend(
+                    handles=legend_handles, ncol=ncols, fontsize=8,
+                    loc='lower right', bbox_to_anchor=(0.99, 0.02),
+                    framealpha=0.88, borderaxespad=0.15,
+                    handlelength=1.8, handletextpad=0.5, columnspacing=1.0,
+                    labelspacing=0.3, borderpad=0.45,
+                )
+
             if plot_options.get('show_stats_box', True):
+                def _safe_float(val):
+                    if val is None or (isinstance(val, float) and np.isnan(val)):
+                        return float('nan')
+                    if hasattr(val, 'item'):
+                        try:
+                            return val.item()
+                        except Exception:
+                            pass
+                    return float(val)
+
                 stats_text = f"Comparativo de {len(series_data)} arquivos:\n"
-                for idx, ((x, y, mu, sigma), label) in enumerate(zip(series_data, labels)):
-                    def _safe_float(val):
-                        if val is None or (isinstance(val, float) and np.isnan(val)):
-                            return float('nan')
-                        if hasattr(val, 'item'):
-                            try:
-                                return val.item()
-                            except:
-                                pass
-                        return float(val)
-                    
+                for (x, y, mu, sigma), label, compact_label in zip(series_data, labels, compact_labels):
                     mu_val = _safe_float(mu)
                     sigma_val = _safe_float(sigma)
-                    stats_text += f"\n{label}:  μ={mu_val:.4f}  σ={sigma_val:.4f}"
-                
-                bbox_props = dict(boxstyle="round,pad=0.7", fc="white", ec="0.4", alpha=0.92)
-                ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=16,
-                       verticalalignment='top', horizontalalignment='left', 
-                       bbox=bbox_props, family='monospace')
-            
-            # Salvar
+                    stats_text += f"{compact_label}: μ={mu_val:.4f}  σ={sigma_val:.4f}\n"
+
+                bbox_props = dict(boxstyle="round,pad=0.45", fc="white", ec="0.4", alpha=0.92)
+                ax.text(
+                    0.02, 0.98, stats_text.rstrip(), transform=ax.transAxes,
+                    fontsize=10, verticalalignment='top', horizontalalignment='left',
+                    bbox=bbox_props, family='monospace',
+                )
+
             outdir = Path(outdir)
             outdir.mkdir(parents=True, exist_ok=True)
             out_png = outdir / output_name
-            
-            plt.tight_layout()
+
+            plt.tight_layout(rect=[0, 0, 1, 0.91])
             plt.savefig(out_png, dpi=220, bbox_inches='tight')
             self.log(f"Gráfico comparativo salvo: {out_png.name}")
-            
+
             if mostrar:
                 plt.show()
             else:
                 plt.close(fig)
-                
+
         except Exception as e:
             self.log(f"Erro ao criar gráfico comparativo: {e}")
             import traceback
             traceback.print_exc()
-    
+
     # TODO: implementar simulacao ATP com entrada .atp
     
     def _get_bg_color(self):
@@ -4542,4 +4792,5 @@ if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "data" / "samples" / "ACP"
     outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd() / "Simulation_Result"
     launch_gui(folder, outdir)
+
 

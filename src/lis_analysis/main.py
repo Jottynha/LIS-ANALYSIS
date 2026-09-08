@@ -126,19 +126,28 @@ def _read_lis_lines(lis_path: Path) -> List[str]:
 
 
 def _parse_lis_output_variables_from_lines(lines: List[str]) -> List[str]:
-    variables = []
+    """Detecta os nomes das colunas de saída no cabeçalho Step/Time do .lis.
+
+    IMPORTANTE: o ATP pode repetir o mesmo nó no cabeçalho (por exemplo,
+    X0003A, X0003B, X0003C, X0003B, ...). Essas ocorrências são colunas
+    distintas e precisam ser preservadas porque representam séries temporais
+    distintas. A interface gráfica pode exibir os nomes de forma única, mas o
+    parser mantém todas as ocorrências para não alterar os dados originais.
+    """
+    variables: List[str] = []
 
     for line in lines:
         if 'Step' in line and 'Time' in line:
             parts = line.split()
             for part in parts:
                 clean_part = part.strip()
-                if clean_part and clean_part not in ['Step', 'Time']:
-                    try:
-                        float(clean_part)
-                        continue
-                    except ValueError:
-                        variables.append(clean_part)
+                if not clean_part or clean_part in ['Step', 'Time']:
+                    continue
+                try:
+                    float(clean_part)
+                    continue
+                except ValueError:
+                    variables.append(clean_part)
             break
 
     return variables
@@ -159,22 +168,29 @@ def _parse_lis_time_series_from_lines(
     if selected_variables is None:
         selected_variables = all_variables
 
-    valid_vars = [v for v in selected_variables if v in all_variables]
-    if not valid_vars:
+    # A seleção da interface é por NOME de nó, mas um mesmo nó pode aparecer
+    # mais de uma vez no cabeçalho do ATP. Nesse caso, selecionar X0003B deve
+    # trazer TODAS as colunas X0003B, preservando o arquivo original.
+    selected_unique: List[str] = []
+    seen_selected = set()
+    for value in selected_variables:
+        if value in all_variables and value not in seen_selected:
+            seen_selected.add(value)
+            selected_unique.append(value)
+
+    if not selected_unique:
         if verbose:
             print(f"⚠️ Nenhuma variável selecionada válida. Disponíveis: {all_variables}")
         return None
 
+    # Para None, todas as ocorrências; para seleção, todas as ocorrências dos
+    # nomes escolhidos, mantendo a ordem original do cabeçalho.
+    selected_names = set(selected_unique)
+    var_indices = [idx for idx, var in enumerate(all_variables) if var in selected_names]
+    valid_vars = [all_variables[idx] for idx in var_indices]
+
     if verbose:
         print(f"📊 Lendo variáveis: {', '.join(valid_vars)}")
-
-    var_indices = []
-    for var in valid_vars:
-        try:
-            idx = all_variables.index(var)
-            var_indices.append(idx)
-        except ValueError:
-            continue
 
     data_rows = []
     in_data = False
@@ -1431,7 +1447,8 @@ def save_time_series_to_excel(df: pd.DataFrame, out_path: Path, sheet_name: str 
 
 # ---------- Criar gráfico de séries temporais ----------
 def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: str = '', 
-                                   salvar_png: bool = True, mostrar: bool = False) -> Optional[Path]:
+                                   salvar_png: bool = True, mostrar: bool = False,
+                                   selected_variables: Optional[List[str]] = None) -> Optional[Path]:
     """
     Cria gráfico com séries temporais das variáveis selecionadas.
     
@@ -1441,6 +1458,7 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
         lis_name: Nome do arquivo .lis (para título)
         salvar_png: Se True, salva PNG
         mostrar: Se True, exibe gráfico
+        selected_variables: Lista opcional de variáveis que serão plotadas.
     
     Returns:
         Path do PNG salvo ou None
@@ -1449,37 +1467,77 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
         print("⚠️ DataFrame vazio, não é possível criar gráfico")
         return None
     
-    # Identificar colunas de variáveis (excluir Step e Time)
-    var_cols = [col for col in df.columns if col not in ['Step', 'Time']]
-    
-    if not var_cols:
-        print("⚠️ Nenhuma variável encontrada no DataFrame")
+    # Identificar colunas de variáveis (excluir Step e Time).
+    # NÃO deduplicar aqui: se o ATP trouxe o mesmo nó duas vezes, cada
+    # ocorrência representa uma coluna/série distinta e deve ser plotada.
+    all_var_cols = [col for col in df.columns if col not in ['Step', 'Time']]
+
+    if selected_variables is None:
+        var_positions = list(range(len(all_var_cols)))
+    else:
+        selected_names = set(selected_variables)
+        var_positions = [
+            idx for idx, col in enumerate(all_var_cols)
+            if col in selected_names
+        ]
+
+    if not var_positions:
+        print("⚠️ Nenhuma variável selecionada para o gráfico")
         return None
-    
+
+    # Cada item é (posição da coluna, nome do nó). Assim conseguimos trabalhar
+    # corretamente com nomes repetidos no DataFrame.
+    var_items = [(idx, all_var_cols[idx]) for idx in var_positions]
+
     # Criar figura
     fig, ax = plt.subplots(figsize=(14, 8))
-    
-    # Plotar cada variável
-    colors = plt.cm.tab10(range(len(var_cols)))
-    
-    for idx, var in enumerate(var_cols):
-        ax.plot(df['Time'], df[var], 
-                label=var, 
-                linewidth=1.5, 
-                color=colors[idx],
-                marker='o' if len(df) < 100 else None,
-                markersize=3 if len(df) < 100 else 0,
-                alpha=0.8)
-    
+
+    # Plotar cada ocorrência de cada variável. Quando X0003B aparece duas
+    # vezes no .lis, as duas curvas são mantidas e ambas aparecem na legenda,
+    # exatamente como no comportamento anterior.
+    colors = plt.cm.tab10(range(len(var_items)))
+
+    variable_series_for_stats = []
+    for idx_plot, (col_idx, var) in enumerate(var_items):
+        series = df.iloc[:, 2 + col_idx]
+        variable_series_for_stats.append((var, series))
+
+        ax.plot(
+            df['Time'],
+            series,
+            label=var,
+            linewidth=1.5,
+            color=colors[idx_plot],
+            marker='o' if len(df) < 100 else None,
+            markersize=3 if len(df) < 100 else 0,
+            alpha=0.8,
+        )
+
     # Configurar eixos e título
     ax.set_xlabel('Tempo (s)', fontsize=12, fontweight='bold')
     ax.set_ylabel('Tensão (V ou pu)', fontsize=12, fontweight='bold')
     ax.set_title(f'Séries Temporais - {lis_name}' if lis_name else 'Séries Temporais', 
                  fontsize=14, fontweight='bold', pad=20)
     
-    # Grid e legenda
+    # Grid e legenda. Deduplica explicitamente para evitar nomes repetidos
+    # quando o DataFrame vier com colunas duplicadas ou histórico de versões antigas.
     ax.grid(True, alpha=0.3, linestyle='--')
-    ax.legend(loc='best', fontsize=10, framealpha=0.9)
+    handles, labels = ax.get_legend_handles_labels()
+    unique_handles = []
+    unique_labels = []
+    seen_labels = set()
+    for handle, label in zip(handles, labels):
+        if label and label not in seen_labels:
+            seen_labels.add(label)
+            unique_handles.append(handle)
+            unique_labels.append(label)
+    if unique_handles:
+        ax.legend(
+            unique_handles, unique_labels,
+            loc='best', fontsize=8, framealpha=0.88,
+            handlelength=1.8, handletextpad=0.5,
+            borderpad=0.4, labelspacing=0.25,
+        )
     
     # Estatísticas na caixa de texto
     # Converter valores para float escalar seguro
@@ -1504,15 +1562,15 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
     time_min = _to_scalar(df['Time'].min())
     time_max = _to_scalar(df['Time'].max())
     
-    stats_text = f"📊 Estatísticas:\n"
+    stats_text = f"Estatísticas:\n"
     stats_text += f"• Pontos: {len(df)}\n"
     stats_text += f"• Tempo: {time_min:.6f}s a {time_max:.6f}s\n"
-    stats_text += f"• Variáveis: {len(var_cols)}\n"
+    stats_text += f"• Variáveis: {len(var_items)}\n"
     
-    for var in var_cols:
-        vmin = _to_scalar(df[var].min())
-        vmax = _to_scalar(df[var].max())
-        vmean = _to_scalar(df[var].mean())
+    for var, series in variable_series_for_stats:
+        vmin = _to_scalar(series.min())
+        vmax = _to_scalar(series.max())
+        vmean = _to_scalar(series.mean())
         stats_text += f"• {var}: min={vmin:.3f}, max={vmax:.3f}, μ={vmean:.3f}\n"
     
     bbox_props = dict(boxstyle="round,pad=0.8", fc="white", ec="0.4", alpha=0.95)
@@ -1579,3 +1637,4 @@ if __name__ == "__main__":
                 # Último recurso: imprimir no stdout (útil se for executado via console)
                 print(tb)
         raise
+

@@ -4500,7 +4500,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if ax2 is not None:
                 ax2.tick_params(axis='y', labelsize=20)
             ax.grid(alpha=0.25)
-            ax.legend(loc='upper left')
+            ax.legend(loc='lower right')
             
             # Curva acumulada
             if plot_options.get('show_cumulative', True):
@@ -4548,8 +4548,7 @@ class ModernLisAnalysisApp(ctk.CTk):
                         f"R² = {_safe_float(computed_stats.get('r2', float('nan'))):.5g}"
                     )
                     bbox_props = dict(boxstyle="round,pad=0.6", fc="white", ec="0.4", alpha=0.9)
-                    stats_y = 0.74 if risk_result is not None else 0.95
-                    ax.text(0.98, stats_y, stats_text, transform=ax.transAxes, fontsize=18,
+                    ax.text(0.98, 0.98, stats_text, transform=ax.transAxes, fontsize=18,
                             verticalalignment='top', horizontalalignment='right', bbox=bbox_props)
                 except Exception:
                     pass
@@ -4570,7 +4569,7 @@ class ModernLisAnalysisApp(ctk.CTk):
             if risk_result is not None:
                 ax.text(
                     0.98,
-                    0.96,
+                    0.74 if plot_options.get('show_stats_box', True) else 0.96,
                     (
                         f"Risco de Falha = {risk_result.risk:.3e}"
                     ),
@@ -4746,8 +4745,8 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                 bbox_props = dict(boxstyle="round,pad=0.45", fc="white", ec="0.4", alpha=0.92)
                 ax.text(
-                    0.02, 0.98, stats_text.rstrip(), transform=ax.transAxes,
-                    fontsize=10, verticalalignment='top', horizontalalignment='left',
+                    0.98, 0.98, stats_text.rstrip(), transform=ax.transAxes,
+                    fontsize=10, verticalalignment='top', horizontalalignment='right',
                     bbox=bbox_props, family='monospace',
                 )
 

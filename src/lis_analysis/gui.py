@@ -4500,7 +4500,10 @@ class ModernLisAnalysisApp(ctk.CTk):
             if ax2 is not None:
                 ax2.tick_params(axis='y', labelsize=20)
             ax.grid(alpha=0.25)
-            ax.legend(loc='lower right')
+            ax.legend(
+                loc='upper right', fontsize=14, framealpha=0.88,
+                borderpad=0.35, labelspacing=0.25,
+            )
             
             # Curva acumulada
             if plot_options.get('show_cumulative', True):
@@ -4559,7 +4562,11 @@ class ModernLisAnalysisApp(ctk.CTk):
             if ax2:
                 lines, labels = ax.get_legend_handles_labels()
                 lines2, labels2 = ax2.get_legend_handles_labels()
-                ax2.legend(lines + lines2, labels + labels2, loc='lower right')
+                ax2.legend(
+                    lines + lines2, labels + labels2,
+                    loc='upper right', fontsize=14, framealpha=0.88,
+                    borderpad=0.35, labelspacing=0.25,
+                )
             
             # Salvar
             outdir = Path(outdir)
@@ -4719,11 +4726,11 @@ class ModernLisAnalysisApp(ctk.CTk):
 
                 ncols = 2 if len(legend_handles) > 1 else 1
                 ax.legend(
-                    handles=legend_handles, ncol=ncols, fontsize=8,
-                    loc='lower right', bbox_to_anchor=(0.99, 0.02),
+                    handles=legend_handles, ncol=ncols, fontsize=14,
+                    loc='upper right', bbox_to_anchor=(0.99, 0.99),
                     framealpha=0.88, borderaxespad=0.15,
                     handlelength=1.8, handletextpad=0.5, columnspacing=1.0,
-                    labelspacing=0.3, borderpad=0.45,
+                    labelspacing=0.25, borderpad=0.35,
                 )
 
             if plot_options.get('show_stats_box', True):
@@ -4791,5 +4798,3 @@ if __name__ == "__main__":
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path.cwd() / "data" / "samples" / "ACP"
     outdir = Path(sys.argv[2]) if len(sys.argv) > 2 else Path.cwd() / "Simulation_Result"
     launch_gui(folder, outdir)
-
-

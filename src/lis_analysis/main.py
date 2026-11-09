@@ -973,7 +973,10 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
     ax.set_xlabel('Tensão (pu)')
     ax.set_ylabel('Frequência')
     ax.grid(alpha=0.25)
-    ax.legend(loc='upper left')
+    ax.legend(
+        loc='upper right', fontsize=12, framealpha=0.88,
+        borderpad=0.35, labelspacing=0.25,
+    )
 
     # eixo secundário acumulado %
     ax2 = ax.twinx()
@@ -1038,7 +1041,11 @@ def criar_grafico_a_partir_do_excel(excel_path: Path, outdir: Path, sim_index: i
 
     lines, labels = ax.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax2.legend(lines + lines2, labels + labels2, loc='lower right')
+    ax2.legend(
+        lines + lines2, labels + labels2,
+        loc='upper right', fontsize=12, framealpha=0.88,
+        borderpad=0.35, labelspacing=0.25,
+    )
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1255,7 +1262,10 @@ def criar_grafico_comparativo(excel_paths: List[Path], outdir: Path, mostrar: bo
     ax.set_ylabel('Frequência')
     ax.grid(alpha=0.25)
     ax.set_title('Comparativo — Distribuição e Ajuste Gaussiano')
-    ax.legend(ncol=2, fontsize=8)
+    ax.legend(
+        ncol=2, fontsize=11, loc='upper right', framealpha=0.88,
+        borderpad=0.35, labelspacing=0.25,
+    )
 
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1534,7 +1544,7 @@ def criar_grafico_series_temporais(df: pd.DataFrame, out_path: Path, lis_name: s
     if unique_handles:
         ax.legend(
             unique_handles, unique_labels,
-            loc='best', fontsize=8, framealpha=0.88,
+            loc='upper right', fontsize=11, framealpha=0.88,
             handlelength=1.8, handletextpad=0.5,
             borderpad=0.4, labelspacing=0.25,
         )
@@ -1637,4 +1647,3 @@ if __name__ == "__main__":
                 # Último recurso: imprimir no stdout (útil se for executado via console)
                 print(tb)
         raise
-
